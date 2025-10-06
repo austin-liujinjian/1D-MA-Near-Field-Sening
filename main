@@ -1,24 +1,30 @@
-  \paragraph*{Remark: Why Symmetric Three-Point Distribution for all ($(u,r)$).}
-    
-    In the adopted near-field model, note that we each antenna element experiences an identical
-    amplitude $|\beta|$, and the received signal differs only in phase
-    $\phi(x;\eta)=\tfrac{2\pi}{\lambda}\!\left(xu-\tfrac{1-u^2}{2r}x^2\right)$, this imply $a \ll r$.
-    Hence, all localization information resides in the \emph{phase derivatives}
-    $\partial_u\phi\!\propto\!x+\tfrac{u}{r}x^2$ and 
-    $\partial_r\phi\!\propto\!x^2$, corresponding to the ``slope'' and
-    ``curvature'' terms. Shifting the array toward the target does not
-    increase SNR but introduces a nonzero cross-covariance
-    $\mathrm{cov}(x,x^2)$, which reduces the determinant
-    $\Delta=\mathrm{var}(x)\mathrm{var}(x^2)-\mathrm{cov}^2(x,x^2)$ of the
-    Fisher information matrix and enlarges both $\mathrm{CRB}_u$ and
-    $\mathrm{CRB}_r$. A symmetric geometry ensures
-    $\mathrm{cov}(x,x^2)=0$, fully decoupling angle and range estimation and
-    yielding
-    \[
-    \mathrm{Tr(CRB)}=\kappa\!\left[
-    \frac{\alpha(u,r)}{\mathrm{var}(x)}+
-    \frac{\beta(u,r)}{\mathrm{var}(x^2)}\right],
-    \]
-    where $\alpha(u,r),\beta(u,r)\!>\!0$ are constants independent of the
-    geometry. 
-	
+\paragraph*{Remark: Why a Symmetric Three-Point Design for all $(u,r)$.}
+Under the USW near-field model (single-path, narrowband), each antenna element has the
+same amplitude $|\beta|$, while the phase varies with location
+\[
+h(x;\eta)=\beta\,\exp\!\Big\{j\frac{2\pi}{\lambda}\Big(xu-\frac{1-u^2}{2r}x^2\Big)\Big\},\qquad
+\eta=[u,r]^\top .
+\]
+This corresponds to the regime $a/r\!\ll\!1$, so elementwise amplitude variations
+$1/r(x)$ are negligible and absorbed into $\beta$. Hence all localization information
+resides in the phase derivatives
+\[
+\partial_u\phi(x;\eta)\ \propto\ x+\tfrac{u}{r}x^2,\qquad
+\partial_r\phi(x;\eta)\ \propto\ x^2,
+\]
+i.e., the ``slope'' and ``curvature'' features. Translating the array toward the target
+does not increase SNR but induces a nonzero cross-covariance
+$\operatorname{cov}(X,X^2)$, which decreases
+\[
+\Delta=\operatorname{var}(X)\operatorname{var}(X^2)-\operatorname{cov}^2(X,X^2)
+\]
+and enlarges both $\mathrm{CRB}_u$ and $\mathrm{CRB}_r$. A symmetric geometry enforces
+$\operatorname{cov}(X,X^2)=0$, fully decoupling angle and range, and yields
+\[
+\operatorname{Tr}(\mathrm{CRB})=\kappa\!\left[
+\frac{\alpha(u,r)}{\operatorname{var}(X)}+
+\frac{\beta(u,r)}{\operatorname{var}(X^2)}\right],
+\]
+where $\alpha(u,r),\beta(u,r)>0$ depend on $(u,r)$ but not on geometry. Optimizing this
+over distributions supported on $[-a,a]$ gives, by moment-extremal arguments, a symmetric
+three-atomic solution supported on $\{-a,0,+a\}$; only the weights depend on $(u,r)$.
