@@ -1,1 +1,46 @@
+\paragraph*{Remark: Why the Symmetric Three-Point Distribution Remains Optimal Even for Edge Targets.}
+In the adopted near-field model, each antenna element experiences an identical
+amplitude gain $|\beta|$, and thus the received signal differs among elements
+only through the spatially varying phase 
+$\phi(x;\eta)=\frac{2\pi}{\lambda}\!\left(xu-\frac{1-u^2}{2r}x^2\right)$.
+Consequently, the Fisher information relies solely on the
+\emph{phase sensitivity} to the parameters $\eta=[u,r]^\top$,
+that is, on the derivatives
+\[
+\frac{\partial \phi}{\partial u}\propto x+\frac{u}{r}x^2
+\quad\text{(``slope'')},\qquad
+\frac{\partial \phi}{\partial r}\propto x^2
+\quad\text{(``curvature'')}.
+\]
+Since all array elements have equal amplitude, moving the entire array
+toward the target (e.g., to the right-hand side) does not enhance the
+per-element signal-to-noise ratio; instead, it introduces a nonzero
+cross-covariance $\mathrm{cov}(x,x^2)$ between the ``slope'' and ``curvature''
+features. This coupling reduces the determinant
+$\Delta=\mathrm{var}(x)\mathrm{var}(x^2)-\mathrm{cov}^2(x,x^2)$
+of the Fisher information matrix while also increasing the numerator terms
+of $\mathrm{CRB}_r$, thereby degrading both angular and range estimation
+accuracy. In contrast, a symmetric geometry enforces
+$\mathrm{cov}(x,x^2)=0$, perfectly decoupling the two types of information.
+Under this condition, the trace of the Cramér--Rao bound simplifies to
+\[
+\mathrm{Tr(CRB)}=\kappa\!\left[
+  \frac{\alpha(u,r)}{\mathrm{var}(x)}
+  +\frac{\beta(u,r)}{\mathrm{var}(x^2)}
+\right],
+\]
+where $\alpha(u,r),\beta(u,r)>0$ are merely scaling factors dependent on
+$(u,r)$ but do not alter the optimal geometry. Maximizing
+$\mathrm{var}(x)$ and $\mathrm{var}(x^2)$ under the aperture constraint
+leads, by the moment-extremal theorem, to a three-atomic symmetric measure
+supported on $\{-a,0,+a\}$ with adaptive weights
+$p^\star(u,r)=1+t-\sqrt{t(1+t)}$ and 
+$t=\beta(u,r)/(\alpha(u,r)a^2)$.
+Even when the target lies at the rightmost direction ($u\!\to\!1^-$),
+this distribution remains optimal: its right endpoint already attains the
+boundary of the aperture, and shifting the array further right would only
+reintroduce feature coupling without any gain in Fisher information.
+Hence, the symmetric three-point structure constitutes a globally optimal
+and robust configuration for all possible $(u,r)$ pairs under the
+equal-amplitude near-field model.
 Here' the creating file
