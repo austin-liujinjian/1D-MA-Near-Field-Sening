@@ -1,3 +1,10 @@
+\paragraph*{Question.}
+When the target is at the right-edge direction (large $u$), one may intuitively think
+``placing more antennas to the right'' helps. Why, under the USW model and Eq.~(3),
+is the \emph{symmetric three-point} geometry still optimal for all $(u,r)$?
+
+
+
 \paragraph*{Remark: Why a Symmetric Three-Point Design for all $(u,r)$.}
 Under the USW near-field model (single-path, narrowband), each antenna element has the
 same amplitude $|\beta|$, while the phase varies with location
