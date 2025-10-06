@@ -1,27 +1,64 @@
-\paragraph*{Remark: On the Optimality of the Symmetric Three-Point Distribution.}
-In the adopted near-field model, each antenna element experiences an identical
-amplitude $|\beta|$, and the received signal differs only in phase
-$\phi(x;\eta)=\tfrac{2\pi}{\lambda}\!\left(xu-\tfrac{1-u^2}{2r}x^2\right)$.
-Hence, all localization information resides in the \emph{phase derivatives}
-$\partial_u\phi\!\propto\!x+\tfrac{u}{r}x^2$ and 
-$\partial_r\phi\!\propto\!x^2$, corresponding to the ``slope'' and
-``curvature'' terms. Shifting the array toward the target does not
-increase SNR but introduces a nonzero cross-covariance
-$\mathrm{cov}(x,x^2)$, which reduces the determinant
-$\Delta=\mathrm{var}(x)\mathrm{var}(x^2)-\mathrm{cov}^2(x,x^2)$ of the
-Fisher information matrix and enlarges both $\mathrm{CRB}_u$ and
-$\mathrm{CRB}_r$. A symmetric geometry ensures
-$\mathrm{cov}(x,x^2)=0$, fully decoupling angle and range estimation and
-yielding
+\section{System Model}
+
+Consider a single-target near-field sensing scenario empowered by a
+movable antenna (MA) array.
+Let the target location be parameterized by
 \[
-\mathrm{Tr(CRB)}=\kappa\!\left[
-\frac{\alpha(u,r)}{\mathrm{var}(x)}+
-\frac{\beta(u,r)}{\mathrm{var}(x^2)}\right],
+\eta=[u,r]^{\top},\quad
+u=\cos\theta,
 \]
-where $\alpha(u,r),\beta(u,r)\!>\!0$ are constants independent of the
-geometry. Maximizing $\mathrm{var}(x)$ and $\mathrm{var}(x^2)$ under
-the aperture constraint leads, by the moment-extremal theorem, to a
-three-point symmetric distribution supported on $\{-a,0,+a\}$.
-Even for edge cases (e.g., $u\!\to\!1^-$), this configuration remains
-optimal, as further right-shifting only reintroduces coupling without
-improving Fisher information.
+where $\theta$ denotes the angle-of-arrival (AoA) and $r$ is the distance
+between the array reference point and the target.
+The wavenumber is defined as $k=\tfrac{2\pi}{\lambda}$, where $\lambda$
+is the carrier wavelength.
+
+\paragraph*{Baseband Channel Model.}
+The baseband channel vector observed by the MA array is modeled as
+\begin{equation}
+\mathbf{h}(\mathbf{x},\eta)
+=\beta\,\boldsymbol{\alpha}(\mathbf{x},\eta),
+\label{eq:chmodel}
+\end{equation}
+where $\beta\!\in\!\mathbb{C}$ denotes the
+complex-valued channel (path) coefficient that incorporates the common
+reflection, scattering, and path-loss effects, and is identical for all
+antenna elements.
+The array manifold vector is given by
+\begin{equation}
+\boldsymbol{\alpha}(\mathbf{x},\eta)
+=\big[e^{j k r_1(\eta)},\,e^{j k r_2(\eta)},\,\ldots,\,e^{j k r_M(\eta)}\big]^{\top},
+\label{eq:steering}
+\end{equation}
+where $r_m(\eta)$ is the propagation distance between the target and the
+$m$-th antenna element located at $x_m$, expressed as
+\begin{equation}
+r_m(\eta)
+=\sqrt{r^2-2r u x_m+x_m^2}.
+\label{eq:rm}
+\end{equation}
+Since the array aperture is much smaller than the target distance
+($A_T\!\ll\!r$), the amplitude variations among different elements caused
+by $1/r_m$ are negligible, and the corresponding attenuation is absorbed
+into the common coefficient $\beta$.
+Therefore, all antenna elements experience an identical amplitude
+$|\beta|$, and only their phases differ.
+
+\paragraph*{Fresnel Approximation.}
+By applying the second-order (Fresnel) approximation to
+\eqref{eq:rm}, one obtains
+\begin{equation}
+r_m(\eta)\approx r - x_m u + \frac{1-u^2}{2r}x_m^2.
+\label{eq:fresnel}
+\end{equation}
+Substituting \eqref{eq:fresnel} into \eqref{eq:steering}, the steering
+vector becomes
+\begin{equation}
+\boldsymbol{\alpha}(\mathbf{x},\eta)
+=\exp\!\left\{j k
+  \left(x_m u - \tfrac{1-u^2}{2r}x_m^2\right)\right\}_{m=1}^M,
+\label{eq:steering2}
+\end{equation}
+which clearly reveals that the spatial information of the target is
+encoded in the \emph{linear} and \emph{quadratic} phase terms, associated
+with the angular ``slope'' and range ``curvature'' of the wavefront,
+respectively.
