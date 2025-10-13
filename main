@@ -1,48 +1,58 @@
 \subsection{Fisher Information Matrix (FIM)}
 
-We consider the complex Gaussian observation model
-$\boldsymbol{y}_t = s_t\,\boldsymbol{h}(\bm{\eta}) + \boldsymbol{w}_t$,
-with $\boldsymbol{w}_t \sim \mathcal{CN}(\mathbf{0},\sigma^2 \mathbf{I}_N)$ and
-$E_s=\sum_{t=1}^T |s_t|^2=PT$.
-Then the FIM for $\bm{\eta}=[u,r]^\top$ is
-\begin{equation}
-\mathbf{J}(\bm{\eta})
-= \frac{2E_s}{\sigma^2}\,\Re\!\left\{
-\left(\frac{\partial \boldsymbol{h}}{\partial \bm{\eta}}\right)^{\!H}
-\left(\frac{\partial \boldsymbol{h}}{\partial \bm{\eta}}\right)
-\right\}\in\mathbb{R}^{2\times 2}.
-\end{equation}
-For the $m$-th element, with $r_m=\sqrt{r^2-2ru x_m+x_m^2}$, $k=2\pi/\lambda$, and
-$h_m=\frac{1}{\sqrt{4\pi}\,r_m}e^{-jkr_m}$, we have
+Let $k=\tfrac{2\pi}{\lambda}$ and $E_s=\sum_{t=1}^T |s_t|^2=PT$.
+For the $m$-th element at $x_m$,
 \[
+r_m=\sqrt{r^2-2ru\,x_m+x_m^2},\quad
 \frac{\partial r_m}{\partial u}=-\frac{r x_m}{r_m},\quad
-\frac{\partial r_m}{\partial r}=\frac{r-u x_m}{r_m},\quad
-\frac{\partial h_m}{\partial q}
-=h_m\!\left(-jk-\frac{1}{r_m}\right)\!\frac{\partial r_m}{\partial q},\ q\in\{u,r\}.
+\frac{\partial r_m}{\partial r}=\frac{r-u x_m}{r_m}.
 \]
-Define $a_m=-\frac{r x_m}{r_m}$, $b_m=\frac{r-u x_m}{r_m}$, $|h_m|^2=\frac{1}{4\pi r_m^2}$, and
-$|D_m|^2=\left| -jk-\frac{1}{r_m}\right|^2=k^2+\frac{1}{r_m^2}$. Then
-\begin{align}
-J_{uu}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,a_m^2,\\
-J_{rr}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,b_m^2,\\
-J_{ur}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,a_m b_m.
-\end{align}
-Equivalently, in expanded form,
+With
+\(
+h_m=\beta_m e^{-j\frac{2\pi}{\lambda}r_m}
+=\frac{1}{\sqrt{4\pi}\,r_m}e^{-j\frac{2\pi}{\lambda}r_m},
+\)
+we have
+\[
+\frac{\partial h_m}{\partial q}
+=h_m\!\left(-j\frac{2\pi}{\lambda}-\frac{1}{r_m}\right)\!\frac{\partial r_m}{\partial q},
+\quad q\in\{u,r\}.
+\]
+Because $\mathbf{y}_t=s_t\mathbf{h}(\eta)+\mathbf{w}_t$, $\mathbf{w}_t\sim\mathcal{CN}(\mathbf{0},\sigma^2\mathbf{I})$,
+the FIM is
+\[
+\mathbf{J}(\eta)=\frac{2E_s}{\sigma^2}\,
+\Re\!\Big\{\!\Big(\tfrac{\partial\mathbf{h}}{\partial\eta}\Big)^{\!H}\!
+\Big(\tfrac{\partial\mathbf{h}}{\partial\eta}\Big)\!\Big\}
+=\begin{bmatrix}J_{uu}&J_{ur}\\J_{ur}&J_{rr}\end{bmatrix},
+\]
+whose entries simplify to
 \begin{align}
 J_{uu}
 &=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{r^2 x_m^2}{r_m^{6}},\\
+\frac{1}{4\pi\,r_m^{2}}\!\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\left(\frac{r x_m}{r_m}\right)^{\!2}\!, \label{eq:Juu_exact} \\
 J_{rr}
 &=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{(r-u x_m)^2}{r_m^{6}},\\
+\frac{1}{4\pi\,r_m^{2}}\!\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\left(\frac{r-u x_m}{r_m}\right)^{\!2}\!, \label{eq:Jrr_exact} \\
 J_{ur}
-&=-\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{r x_m(r-u x_m)}{r_m^{6}}.
+&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi\,r_m^{2}}\!\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\left(\frac{-r x_m}{r_m}\right)\!\left(\frac{r-u x_m}{r_m}\right)\!. \label{eq:Jur_exact}
 \end{align}
 
-\subsection{CRB Expressions}
-Let $\Delta=J_{uu}J_{rr}-J_{ur}^2$. The CRBs are
-\begin{equation}
-\mathrm{CRB}_u = \frac{J_{rr}}{\Delta},\qquad
-\mathrm{CRB}_r = \frac{J_{uu}}{\Delta}.
-\end{equation}
+\begin{align}
+J_{uu}
+&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\frac{r^{2}x_m^{2}}{r_m^{4}}, \\
+J_{rr}
+&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\frac{(r-u x_m)^{2}}{r_m^{4}}, \\
+J_{ur}
+&=-\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
+\frac{r x_m\,(r-u x_m)}{r_m^{4}}.
+\end{align}
