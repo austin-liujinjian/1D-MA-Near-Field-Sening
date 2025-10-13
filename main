@@ -15,4 +15,34 @@ Then the FIM for $\bm{\eta}=[u,r]^\top$ is
 For the $m$-th element, with $r_m=\sqrt{r^2-2ru x_m+x_m^2}$, $k=2\pi/\lambda$, and
 $h_m=\frac{1}{\sqrt{4\pi}\,r_m}e^{-jkr_m}$, we have
 \[
-\frac{\p
+\frac{\partial r_m}{\partial u}=-\frac{r x_m}{r_m},\quad
+\frac{\partial r_m}{\partial r}=\frac{r-u x_m}{r_m},\quad
+\frac{\partial h_m}{\partial q}
+=h_m\!\left(-jk-\frac{1}{r_m}\right)\!\frac{\partial r_m}{\partial q},\ q\in\{u,r\}.
+\]
+Define $a_m=-\frac{r x_m}{r_m}$, $b_m=\frac{r-u x_m}{r_m}$, $|h_m|^2=\frac{1}{4\pi r_m^2}$, and
+$|D_m|^2=\left| -jk-\frac{1}{r_m}\right|^2=k^2+\frac{1}{r_m^2}$. Then
+\begin{align}
+J_{uu}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,a_m^2,\\
+J_{rr}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,b_m^2,\\
+J_{ur}&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N |h_m|^2\,|D_m|^2\,a_m b_m.
+\end{align}
+Equivalently, in expanded form,
+\begin{align}
+J_{uu}
+&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{r^2 x_m^2}{r_m^{6}},\\
+J_{rr}
+&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{(r-u x_m)^2}{r_m^{6}},\\
+J_{ur}
+&=-\frac{2E_s}{\sigma^2}\sum_{m=1}^N
+\frac{1}{4\pi}\Big(k^2+\frac{1}{r_m^2}\Big)\frac{r x_m(r-u x_m)}{r_m^{6}}.
+\end{align}
+
+\subsection{CRB Expressions}
+Let $\Delta=J_{uu}J_{rr}-J_{ur}^2$. The CRBs are
+\begin{equation}
+\mathrm{CRB}_u = \frac{J_{rr}}{\Delta},\qquad
+\mathrm{CRB}_r = \frac{J_{uu}}{\Delta}.
+\end{equation}
