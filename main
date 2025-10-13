@@ -1,120 +1,18 @@
-	\section{System Model}
-	
-	Consider a single-target sensing scenario empowered by a movable-antenna (MA) array.
-	The target is located in the near-field region of the array but outside its reactive region,
-	which means that the propagation distances between the target and all antenna elements
-	fall within the Fresnel region.
-	Here, $\lambda$ denotes the signal wavelength and $a$ represents the array half-aperture.
-	
-	We adopt a near-field spherical-wave model.
-	Let the target location be parameterized as
-	\[
-	\bm{\eta} = [u,\,r]^{\top}, \qquad u = \cos\theta,
-	\]
-	where $\theta$ denotes the angle of arrival (AoA),
-	and $r$ is the distance between the array reference point (phase center) and the target.
-	
-	The position of the $m$-th antenna element is denoted by $x_m$
-	along the array axis. Then, the exact propagation distance between the
-	target and the $m$-th element is given by
-	\begin{equation}
-		r_m(\bm{\eta}) = \big\|\,\mathbf{r} - \mathbf{s}_m\,\big\|
-		= \sqrt{\,r^2 - 2rux_m + x_m^2\,}.
-		\label{eq:exact_distance}
-	\end{equation}
-	\footnote{This can be approximated
-	up to the second-order (Fresnel) term in the Taylor expansion $r_m(\bm{\eta}) \approx r - x_m u + \frac{1-u^2}{2r}x_m^2$.}
-	
-	The array manifold (steering) vector under the spherical-wave model is expressed as
-	\begin{equation}
-		\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta})
-		=
-		\big[
-		e^{j\frac{2\pi}{\lambda} r_1(\bm{\eta})},\,
-		e^{j\frac{2\pi}{\lambda} r_2(\bm{\eta})},\,
-		\ldots,\,
-		e^{j\frac{2\pi}{\lambda} r_N(\bm{\eta})}
-		\big]^{\top}.
-		\label{eq:steering}
-	\end{equation}
-	
-	For each antenna element, the path-loss coefficient is determined
-	by the inverse-square law as
-	\begin{equation}
-		\beta_m = \frac{1}{\sqrt{4\pi\,r_m^2(\bm{\eta})}},
-		\label{eq:pathloss}
-	\end{equation}
-	which explicitly depends on the true geometric distance $r_m(\bm{\eta})$
-	and thus varies slightly across the array in the near-field.
-	\footnote{	If the array aperture is sufficiently small compared with the range (i.e., $a/r \ll 1$),
-		the amplitude variation can be neglected and \eqref{eq:pathloss}
-		reduces to the uniform-spherical-wave (USW) model:$\beta_m \approx \beta = \frac{1}{\sqrt{4\pi r^2}}$,
-		which assumes identical path-loss for all elements.}
-	
+\subsection{Fisher Information Matrix (FIM)}
 
-	
-	The complex channel coefficient between the $m$-th antenna element and the target is then given by
-	\begin{equation}
-		h(x_m,\bm{\eta})
-		= \beta_m\,e^{-j\frac{2\pi}{\lambda}r_m(\bm{\eta})}.
-		\label{eq:hxm}
-	\end{equation}
-	
-	Accordingly, the complete line-of-sight (LoS) channel vector is
-	\begin{equation}
-		\begin{aligned}
-			\boldsymbol{h}(\mathbf{x}, \bm{\eta})
-			&= 
-			[\,h(x_1,\bm{\eta}),\,h(x_2,\bm{\eta}),\,\ldots,\,h(x_N,\bm{\eta})\,]^{\mathrm{T}} \\
-			&= 
-			\big[
-			\beta_1 e^{-j\frac{2\pi}{\lambda}r_1(\bm{\eta})},\,
-			\beta_2 e^{-j\frac{2\pi}{\lambda}r_2(\bm{\eta})},\,
-			\ldots,\,
-			\beta_N e^{-j\frac{2\pi}{\lambda}r_N(\bm{\eta})}
-			\big]^{\mathrm{T}}.
-		\end{aligned}
-		\label{eq:hvector}
-	\end{equation}
-	
-	When the uniform path-loss assumption holds, \eqref{eq:hvector} simplifies to
-	\[
-	\boldsymbol{h}(\mathbf{x}, \bm{\eta})
-	= \beta\,\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta}) \in \mathbb{C}^{N}.
-	\]
-	
-
-	
-	In the joint estimation of the spatial angle-of-arrival (AoA) parameter $u$ and the distance $r$, the Cramér-Rao bounds (CRBs) are derived from the Fisher information matrix (FIM).
-	
-	
-	\begin{figure*}[t]
-		\begin{equation}
-			\mathbf{FIM}(\mathbf{x}, \eta) = \frac{2}{\sigma^2} \sum_{t=1}^T \Re \left\{ s_t^* \boldsymbol{\Psi}(\mathbf{x}, \eta)^H
-			\left( \mathbf{I}_N - \boldsymbol{\alpha}(\mathbf{x}, \eta)
-			\left( \boldsymbol{\alpha}(\mathbf{x}, \eta)^H \boldsymbol{\alpha}(\mathbf{x}, \eta) \right)^{-1}
-			\boldsymbol{\alpha}(\mathbf{x}, \eta)^H \right)
-			\boldsymbol{\Psi}(\mathbf{x}, \eta) s_t \right\},
-		\end{equation}
-		\hrulefill
-	\end{figure*}
-	
-	\subsection{Fisher Information Matrix (FIM)}
-
-	The FIM for the estimator \(\eta\) is
-	
-	
-	where \(\boldsymbol{\Psi}(\mathbf{x}, \eta) = \left[ \frac{\partial \boldsymbol{\alpha}(\mathbf{x}, \eta)}{\partial u}, \frac{\partial \boldsymbol{\alpha}(\mathbf{x}, \eta)}{\partial r} \right] \in \mathbb{C}^{N \times 2}\) is the Jacobian of the near-field steering vector \(\boldsymbol{\alpha}(\mathbf{x}, \eta)\).
-	
-	 The sensing signal satisfies \(\mathbb{E}\{|s_t|^2\} = P\), and the noise is \(\mathbf{w}_t \sim \mathcal{CN}(\mathbf{0}, \sigma^2 \mathbf{I}_N)\). 
-	 
-	
-	\subsection{CRB Expressions}
-
-    
-	\begin{equation}
-		\begin{aligned}
-			&\mathrm{CRB}_u(\mathbf{x}) = , \nonumber \\
-			&	\mathrm{CRB}_r(\mathbf{x}, \bm{\eta}) = .\nonumber \\
-		\end{aligned}
-	\end{equation}
+We consider the complex Gaussian observation model
+$\boldsymbol{y}_t = s_t\,\boldsymbol{h}(\bm{\eta}) + \boldsymbol{w}_t$,
+with $\boldsymbol{w}_t \sim \mathcal{CN}(\mathbf{0},\sigma^2 \mathbf{I}_N)$ and
+$E_s=\sum_{t=1}^T |s_t|^2=PT$.
+Then the FIM for $\bm{\eta}=[u,r]^\top$ is
+\begin{equation}
+\mathbf{J}(\bm{\eta})
+= \frac{2E_s}{\sigma^2}\,\Re\!\left\{
+\left(\frac{\partial \boldsymbol{h}}{\partial \bm{\eta}}\right)^{\!H}
+\left(\frac{\partial \boldsymbol{h}}{\partial \bm{\eta}}\right)
+\right\}\in\mathbb{R}^{2\times 2}.
+\end{equation}
+For the $m$-th element, with $r_m=\sqrt{r^2-2ru x_m+x_m^2}$, $k=2\pi/\lambda$, and
+$h_m=\frac{1}{\sqrt{4\pi}\,r_m}e^{-jkr_m}$, we have
+\[
+\frac{\p
