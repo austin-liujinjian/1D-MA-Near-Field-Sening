@@ -1,162 +1,77 @@
-%% ==========================================================
-%  Plot p*(r) and Tr(CRB_min) vs distance r
-%  Fixed u (i.e., fixed AoA θ)
-%  Using Fresnel 2nd-order near-field model
-% ==========================================================
-clear; clc;
+	\section{System Model}
+	
 
-% ---- Enable LaTeX rendering globally ----
-set(groot,'defaultTextInterpreter','latex');
-set(groot,'defaultAxesTickLabelInterpreter','latex');
-set(groot,'defaultLegendInterpreter','latex');
-
-%% ===== Fixed parameters =====
-sigma2  = 0.1;               % noise power
-lambda  = 8e-3;              % wavelength (m)
-T       = 100;               % number of snapshots
-P       = 1;                 % signal power
-N       = 16;                % number of antennas
-a       = 10 * lambda;       % half aperture (m)
-R_ray   = 8 * a^2 / lambda;  % Rayleigh distance
-R_Fr    = a * (2*a/lambda)^(1/3);  % Fresnel lower bound
-u       = cosd(90);          % fixed direction cosine (example: θ = 90°)
-
-%% ===== Distance sweep =====
-r_vals = linspace(R_Fr, R_ray, 300);   
-pstar_vals = zeros(size(r_vals));
-TrCRB_vals = zeros(size(r_vals));
-
-%% ===== Main computation loop =====
-for j = 1:length(r_vals)
-    r = r_vals(j);
-    absBeta = 1/(4*pi*r^2);          % |β|^2 = 1/(4πr^2)
-    kappa = sigma2 * lambda^2 / (8*pi^2 * T * P * N * absBeta^2);
-
-    % ---- Compute α, β, t ----
-    alpha = 1 + 4*r^2*u^2/(1-u^2)^2;
-    beta  = 4*r^4/(1-u^2)^2;
-    t     = beta / (alpha * a^2);
-
-    % ---- Optimal p* ----
-    pstar = 1 + t - sqrt(t*(1+t));
-
-    % ---- Minimal Tr(CRB) ----
-    TrCRB = (kappa*alpha/a^2) * (1/pstar + t/(pstar*(1-pstar)));
-
-    % ---- Store results ----
-    pstar_vals(j) = pstar;
-    TrCRB_vals(j) = TrCRB;
-end
-
-%% ===== Plot results =====
-figure('Position',[200 200 1000 400]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
-
-% ---- Left panel: p*(r)
-nexttile;
-plot(r_vals, pstar_vals, 'LineWidth', 1.8);
-xlabel('$r~[\mathrm{m}]$');
-ylabel('$p^{\star}(r)$');
-title(sprintf('$p^{\\star}(r)$ at $\\theta = %.0f^{\\circ}$', acosd(u)));
-grid on;
-xlim([R_Fr, R_ray]);
-set(gca,'FontSize',12,'TickLabelInterpreter','latex');
-
-% ---- Right panel: Tr(CRB)(r)
-nexttile;
-semilogy(r_vals, TrCRB_vals, 'LineWidth', 1.8);
-xlabel('$r~[\mathrm{m}]$');
-ylabel('$\\mathrm{Tr}\\big(\\mathrm{CRB}_{\\min}\\big)$');
-title('$\\mathrm{Trace~of~CRB~vs.~distance}~r$');
-grid on;
-xlim([R_Fr, R_ray]);
-set(gca,'FontSize',12,'TickLabelInterpreter','latex');
-
-%% ===== Print summary info =====
-fprintf('Fixed θ = %.1f°, u = %.3f\n', acosd(u), u);
-fprintf('R_Fr = %.4f m,  R_Ray = %.4f m\n', R_Fr, R_ray);
-fprintf('Example: r = %.2f m, p* = %.4f, Tr(CRB) = %.3e\n', ...
-        r_vals(round(end/2)), pstar_vals(round(end/2)), TrCRB_vals(round(end/2)));
-
-
-
-
-%% ==========================================================
-%  Plot p*(θ) and Tr(CRB_min) vs AoA θ
-%  Fixed r, using Fresnel 2nd-order near-field model
-% ==========================================================
-clear; clc;
-
-% ---- Enable LaTeX rendering globally ----
-set(groot,'defaultTextInterpreter','latex');
-set(groot,'defaultAxesTickLabelInterpreter','latex');
-set(groot,'defaultLegendInterpreter','latex');
-
-%% ===== Fixed parameters =====
-sigma2  = 0.1;               % noise power
-lambda  = 8e-3;              % wavelength (m)
-T       = 100;               % number of snapshots
-P       = 1;                 % signal power
-N       = 16;                % number of antennas
-a       = 10 * lambda;       % half aperture (m)
-R_ray   = 8 * a^2 / lambda;  % Rayleigh distance
-R_Fr    = a * (2*a/lambda)^(1/3);  % Fresnel lower bound
-r       = 0.8;               % fixed distance (m)
-absBeta = 1/(4*pi*r^2);      % |β|^2 = 1/(4πr^2)
-
-%% ===== Compute κ =====
-kappa = sigma2 * lambda^2 / (8*pi^2 * T * P * N * absBeta^2);
-
-%% ===== AoA sweep =====
-theta_vals = linspace(0, 180, 180);     % angle range [0°, 180°]
-u_vals = cosd(theta_vals);              % direction cosines
-
-pstar_vals = zeros(size(theta_vals));
-TrCRB_vals = zeros(size(theta_vals));
-
-%% ===== Main computation loop =====
-for j = 1:length(theta_vals)
-    u = u_vals(j);
-    alpha = 1 + 4*r^2*u^2/(1-u^2)^2;
-    beta  = 4*r^4/(1-u^2)^2;
-    t     = beta / (alpha * a^2);
-
-    % ---- Optimal p* ----
-    pstar = 1 + t - sqrt(t*(1+t));
-    pstar_vals(j) = pstar;
-
-    % ---- Minimal Tr(CRB) ----
-    TrCRB_vals(j) = (kappa*alpha/a^2) * (1/pstar + t/(pstar*(1-pstar)));
-end
-
-%% ===== Plot results =====
-figure('Position',[200 200 1000 400]);
-tiledlayout(1,2,'Padding','compact','TileSpacing','compact');
-
-% ---- Left panel: p*(θ)
-nexttile;
-plot(theta_vals, pstar_vals, 'LineWidth', 1.8);
-xlabel('$\\theta~[^{\\circ}]$');
-ylabel('$p^{\\star}(\\theta)$');
-title(sprintf('$p^{\\star}(\\theta)$ at $r = %.1f~\\mathrm{m}$', r));
-grid on; 
-xlim([0 180]); xticks(0:30:180);
-set(gca,'FontSize',12,'TickLabelInterpreter','latex');
-
-% ---- Right panel: Tr(CRB)(θ)
-nexttile;
-semilogy(theta_vals, TrCRB_vals, 'LineWidth', 1.8);
-xlabel('$\\theta~[^{\\circ}]$');
-ylabel('$\\mathrm{Tr}\\big(\\mathrm{CRB}_{\\min}\\big)$');
-title('$\\mathrm{Trace~of~CRB~vs.~AoA}~\\theta$');
-grid on; 
-xlim([0 180]); xticks(0:30:180);
-set(gca,'FontSize',12,'TickLabelInterpreter','latex');
-
-%% ===== Print summary info =====
-fprintf('Fixed r = %.2f m, aperture a = %.3f m, lambda = %.3f m\n', r, a, lambda);
-fprintf('kappa = %.3e\n', kappa);
-fprintf('Example: θ = %.1f°, p* = %.4f, Tr(CRB) = %.3e\n', ...
-        theta_vals(150), pstar_vals(150), TrCRB_vals(150));
-fprintf('R_ray = %.4f, R_Fr = %.4f\n', R_ray, R_Fr);
-
+	
+	Consider a single-target sensing scenario
+	empowered by a movable-antenna (MA) array, target is located in the near-field region of the linear array
+	but outside its reactive region, which means that the distance
+	between the target and any position within the MA array is
+	within Fresnel distance, where $\lambda$ is the signal wavelength and $a$ is the half aperture. 
+	
+	We adopt near-field model, 
+	
+	Let the target location be parameterized by
+	\[
+	\bm{\eta}=[u,r]^{\top},\quad
+	u=\cos\theta,
+	\]
+	where $\theta$ denotes the angle-of-arrival (AoA) and $r$ is the distance
+	between the array reference point and the target.
+	
+	
+	The array manifold vector is given by
+	\begin{equation}
+		\boldsymbol{\alpha}(\mathbf{x},\bm{\eta})
+		=\big[e^{j \frac{2\pi}{\lambda} r_1(\bm{\eta})},\,e^{j \frac{2\pi}{\lambda} r_2(\bm{\eta})},\,\ldots,\,e^{j \frac{2\pi}{\lambda} r_M(\bm{\eta})}\big]^{\top},
+		\label{eq:steering}
+	\end{equation}
+	where $r_m(\bm{\eta})$ is the propagation distance between the target and the
+	$m$-th antenna element located at $x_m$, the spherical path difference can be accurately calculated as:
+	\footnote{This can be approximated
+		up to the second-order (Fresnel) term in the Taylor expansion $r_m(\bm{\eta}) \approx r - x_m u + \frac{1-u^2}{2r}x_m^2$.}
+	\begin{equation}
+		\begin{aligned}
+			r_m(\bm{\eta})
+			&=\sqrt{r^2-2r u x_m+x_m^2}
+			\label{eq:fresnel}
+		\end{aligned}
+	\end{equation}
+	Substituting \eqref{eq:fresnel} into \eqref{eq:steering}, the steering
+	vector becomes
+	\begin{equation}
+		\boldsymbol{\alpha}(\mathbf{x},\bm{\eta})
+		=\exp\!\left\{j \frac{2\pi}{\lambda}
+		\left(\sqrt{r^2-2r u x_m+x_m^2}\right)\right\}_{m=1}^M,
+		\label{eq:steering2}
+	\end{equation}
+	
+	Let path loss $\beta$ between
+	the origin of the MA array and the target is
+	\footnote{
+		For USW model, typically $\beta = \frac{1}{\sqrt{4\pi r^2}}$, where $r$ represent the distance between the array reference point and the target, i.e., the propagation distance of LoS path, which is \textit{independent} of MA geometry with given aperture.
+	}
+	\begin{equation}
+		\beta = \frac{1}{\sqrt{4\pi r_m(\bm{\eta})}}
+	\end{equation}
+    Then, the channel
+	coefficient between the $n$-th MA and the target is given by
+	\begin{equation}
+		h(x_n,\bm{\eta})
+		= \tilde{\beta}\,e^{-j\frac{2\pi}{\lambda}r_n(x_n,\bm{\eta})}
+		= \beta\,e^{j\frac{2\pi}{\lambda}\!\left(x_n u - \frac{x_n^2(1-u^2)}{2r}\right)},
+		\label{eq:hxn}
+	\end{equation}
+	is the complex channel gain that incorporates the common
+	reflection, scattering, and path-loss effects, and is identical for all
+	antenna elements.
+	
+	As a result, the echoed LoS channel
+	vector can be written as
+	\begin{equation}
+		\begin{aligned}
+			\boldsymbol{h}(\boldsymbol{x},\bm{\eta})
+			&= [\,h(x_1,\bm{\eta}),\,h(x_2,\bm{\eta}),\,\ldots,\,h(x_N,\bm{\eta})\,]^{\mathrm{T}} \nonumber \\
+			&= \beta\,\boldsymbol{\alpha}(\boldsymbol{x},\bm{\eta}) \in \mathbb{C}^{N},
+		\end{aligned}
+		\label{eq:hxvector}
+	\end{equation}
