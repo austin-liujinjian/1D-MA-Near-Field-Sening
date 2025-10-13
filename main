@@ -1,77 +1,108 @@
-	\section{System Model}
-	
+\section{System Model}
 
-	
-	Consider a single-target sensing scenario
-	empowered by a movable-antenna (MA) array, target is located in the near-field region of the linear array
-	but outside its reactive region, which means that the distance
-	between the target and any position within the MA array is
-	within Fresnel distance, where $\lambda$ is the signal wavelength and $a$ is the half aperture. 
-	
-	We adopt near-field model, 
-	
-	Let the target location be parameterized by
-	\[
-	\bm{\eta}=[u,r]^{\top},\quad
-	u=\cos\theta,
-	\]
-	where $\theta$ denotes the angle-of-arrival (AoA) and $r$ is the distance
-	between the array reference point and the target.
-	
-	
-	The array manifold vector is given by
-	\begin{equation}
-		\boldsymbol{\alpha}(\mathbf{x},\bm{\eta})
-		=\big[e^{j \frac{2\pi}{\lambda} r_1(\bm{\eta})},\,e^{j \frac{2\pi}{\lambda} r_2(\bm{\eta})},\,\ldots,\,e^{j \frac{2\pi}{\lambda} r_M(\bm{\eta})}\big]^{\top},
-		\label{eq:steering}
-	\end{equation}
-	where $r_m(\bm{\eta})$ is the propagation distance between the target and the
-	$m$-th antenna element located at $x_m$, the spherical path difference can be accurately calculated as:
-	\footnote{This can be approximated
-		up to the second-order (Fresnel) term in the Taylor expansion $r_m(\bm{\eta}) \approx r - x_m u + \frac{1-u^2}{2r}x_m^2$.}
-	\begin{equation}
-		\begin{aligned}
-			r_m(\bm{\eta})
-			&=\sqrt{r^2-2r u x_m+x_m^2}
-			\label{eq:fresnel}
-		\end{aligned}
-	\end{equation}
-	Substituting \eqref{eq:fresnel} into \eqref{eq:steering}, the steering
-	vector becomes
-	\begin{equation}
-		\boldsymbol{\alpha}(\mathbf{x},\bm{\eta})
-		=\exp\!\left\{j \frac{2\pi}{\lambda}
-		\left(\sqrt{r^2-2r u x_m+x_m^2}\right)\right\}_{m=1}^M,
-		\label{eq:steering2}
-	\end{equation}
-	
-	Let path loss $\beta$ between
-	the origin of the MA array and the target is
-	\footnote{
-		For USW model, typically $\beta = \frac{1}{\sqrt{4\pi r^2}}$, where $r$ represent the distance between the array reference point and the target, i.e., the propagation distance of LoS path, which is \textit{independent} of MA geometry with given aperture.
-	}
-	\begin{equation}
-		\beta = \frac{1}{\sqrt{4\pi r_m(\bm{\eta})}}
-	\end{equation}
-    Then, the channel
-	coefficient between the $n$-th MA and the target is given by
-	\begin{equation}
-		h(x_n,\bm{\eta})
-		= \tilde{\beta}\,e^{-j\frac{2\pi}{\lambda}r_n(x_n,\bm{\eta})}
-		= \beta\,e^{j\frac{2\pi}{\lambda}\!\left(x_n u - \frac{x_n^2(1-u^2)}{2r}\right)},
-		\label{eq:hxn}
-	\end{equation}
-	is the complex channel gain that incorporates the common
-	reflection, scattering, and path-loss effects, and is identical for all
-	antenna elements.
-	
-	As a result, the echoed LoS channel
-	vector can be written as
-	\begin{equation}
-		\begin{aligned}
-			\boldsymbol{h}(\boldsymbol{x},\bm{\eta})
-			&= [\,h(x_1,\bm{\eta}),\,h(x_2,\bm{\eta}),\,\ldots,\,h(x_N,\bm{\eta})\,]^{\mathrm{T}} \nonumber \\
-			&= \beta\,\boldsymbol{\alpha}(\boldsymbol{x},\bm{\eta}) \in \mathbb{C}^{N},
-		\end{aligned}
-		\label{eq:hxvector}
-	\end{equation}
+Consider a single-target sensing scenario empowered by a movable-antenna (MA) array.
+The target is located in the near-field region of the array but outside its reactive region,
+which means that the propagation distances between the target and all antenna elements
+fall within the Fresnel region.
+Here, $\lambda$ denotes the signal wavelength and $a$ represents the array half-aperture.
+
+---
+
+\subsection{Geometric Parameterization}
+
+We adopt a near-field spherical-wave model.
+Let the target location be parameterized as
+\[
+\bm{\eta} = [u,\,r]^{\top}, \qquad u = \cos\theta,
+\]
+where $\theta$ denotes the angle of arrival (AoA),
+and $r$ is the distance between the array reference point (phase center) and the target.
+
+The position of the $m$-th antenna element is denoted by $x_m$
+along the array axis. Then, the exact propagation distance between the
+target and the $m$-th element is given by
+\begin{equation}
+r_m(\bm{\eta}) = \big\|\,\mathbf{r} - \mathbf{s}_m\,\big\|
+= \sqrt{\,r^2 - 2rux_m + x_m^2\,}.
+\label{eq:exact_distance}
+\end{equation}
+
+---
+
+\subsection{Steering Vector and Path-Loss}
+
+The array manifold (steering) vector under the spherical-wave model is expressed as
+\begin{equation}
+\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta})
+=
+\big[
+e^{j\frac{2\pi}{\lambda} r_1(\bm{\eta})},\,
+e^{j\frac{2\pi}{\lambda} r_2(\bm{\eta})},\,
+\ldots,\,
+e^{j\frac{2\pi}{\lambda} r_N(\bm{\eta})}
+\big]^{\top}.
+\label{eq:steering}
+\end{equation}
+
+For each antenna element, the path-loss coefficient is determined
+by the inverse-square law as
+\begin{equation}
+\beta_m = \frac{1}{\sqrt{4\pi\,r_m^2(\bm{\eta})}},
+\label{eq:pathloss}
+\end{equation}
+which explicitly depends on the true geometric distance $r_m(\bm{\eta})$
+and thus varies slightly across the array in the near-field.
+
+If the array aperture is sufficiently small compared with the range (i.e., $a/r \ll 1$),
+the amplitude variation can be neglected and \eqref{eq:pathloss}
+reduces to the uniform-spherical-wave (USW) model:
+\[
+\beta_m \approx \beta = \frac{1}{\sqrt{4\pi r^2}},
+\]
+which assumes identical path-loss for all elements.
+
+---
+
+\subsection{Channel Representation}
+
+The complex channel coefficient between the $m$-th antenna element and the target is then given by
+\begin{equation}
+h(x_m,\bm{\eta})
+= \beta_m\,e^{-j\frac{2\pi}{\lambda}r_m(\bm{\eta})}.
+\label{eq:hxm}
+\end{equation}
+
+Accordingly, the complete line-of-sight (LoS) channel vector is
+\begin{equation}
+\begin{aligned}
+\boldsymbol{h}(\mathbf{x}, \bm{\eta})
+&= 
+[\,h(x_1,\bm{\eta}),\,h(x_2,\bm{\eta}),\,\ldots,\,h(x_N,\bm{\eta})\,]^{\mathrm{T}} \\
+&= 
+\big[
+\beta_1 e^{-j\frac{2\pi}{\lambda}r_1(\bm{\eta})},\,
+\beta_2 e^{-j\frac{2\pi}{\lambda}r_2(\bm{\eta})},\,
+\ldots,\,
+\beta_N e^{-j\frac{2\pi}{\lambda}r_N(\bm{\eta})}
+\big]^{\mathrm{T}}.
+\end{aligned}
+\label{eq:hvector}
+\end{equation}
+
+When the uniform path-loss assumption holds, \eqref{eq:hvector} simplifies to
+\[
+\boldsymbol{h}(\mathbf{x}, \bm{\eta})
+= \beta\,\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta}) \in \mathbb{C}^{N}.
+\]
+
+---
+
+\subsection{Optional Fresnel Approximation}
+
+For analytical tractability, one may invoke the Fresnel (second-order) approximation:
+\begin{equation}
+r_m(\bm{\eta}) \approx r - x_m u + \frac{(1-u^2)x_m^2}{2r},
+\label{eq:fresnel}
+\end{equation}
+which allows closed-form CRB derivation but introduces noticeable bias
+when $a/r$ is not sufficiently small (i.e., in the strong near-field regime).
