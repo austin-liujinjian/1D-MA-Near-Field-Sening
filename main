@@ -1,160 +1,221 @@
-	\section{System Model}
-	
-	Consider a single-target sensing scenario empowered by a movable-antenna (MA) array.
-	The target is located in the near-field region of the array but outside its reactive region,
-	which means that the propagation distances between the target and all antenna elements
-	fall within the Fresnel region.
-	Here, $\lambda$ denotes the signal wavelength and $a$ represents the array half-aperture.
-	
-	We adopt a near-field spherical-wave model.
-	Let the target location be parameterized as
-	\[
-	\bm{\eta} = [u,\,r]^{\top}, \qquad u = \cos\theta,
-	\]
-	where $\theta$ denotes the angle of arrival (AoA),
-	and $r$ is the distance between the array reference point (phase center) and the target.
-	
-	The position of the $m$-th antenna element is denoted by $x_m$
-	along the array axis. Then, the exact propagation distance between the
-	target and the $m$-th element is given by
-	\begin{equation}
-		r_m(\bm{\eta}) = \big\|\,\mathbf{r} - \mathbf{s}_m\,\big\|
-		= \sqrt{\,r^2 - 2rux_m + x_m^2\,}.
-		\label{eq:exact_distance}
-	\end{equation}
-	\footnote{This can be approximated
-	up to the second-order (Fresnel) term in the Taylor expansion $r_m(\bm{\eta}) \approx r - x_m u + \frac{1-u^2}{2r}x_m^2$.}
-	
-	The array manifold (steering) vector under the spherical-wave model is expressed as
-	\begin{equation}
-		\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta})
-		=
-		\big[
-		e^{j\frac{2\pi}{\lambda} r_1(\bm{\eta})},\,
-		e^{j\frac{2\pi}{\lambda} r_2(\bm{\eta})},\,
-		\ldots,\,
-		e^{j\frac{2\pi}{\lambda} r_N(\bm{\eta})}
-		\big]^{\top}.
-		\label{eq:steering}
-	\end{equation}
-	
-	For each antenna element, the path-loss coefficient is determined
-	by the inverse-square law as
-	\begin{equation}
-		\beta_m = \frac{1}{\sqrt{4\pi\,r_m^2(\bm{\eta})}},
-		\label{eq:pathloss}
-	\end{equation}
-	which explicitly depends on the true geometric distance $r_m(\bm{\eta})$
-	and thus varies slightly across the array in the near-field.
-	\footnote{	If the array aperture is sufficiently small compared with the range (i.e., $a/r \ll 1$),
-		the amplitude variation can be neglected and \eqref{eq:pathloss}
-		reduces to the uniform-spherical-wave (USW) model:$\beta_m \approx \beta = \frac{1}{\sqrt{4\pi r^2}}$,
-		which assumes identical path-loss for all elements.}
-	
+\newtheorem{lemma}{Lemma}
+\newtheorem{theorem}{Theorem}
 
-	
-	The complex channel coefficient between the $m$-th antenna element and the target is then given by
-	\begin{equation}
-		h(x_m,\bm{\eta})
-		= \beta_m\,e^{-j\frac{2\pi}{\lambda}r_m(\bm{\eta})}.
-		\label{eq:hxm}
-	\end{equation}
-	
-	Accordingly, the complete line-of-sight (LoS) channel vector is
-	\begin{equation}
-		\begin{aligned}
-			\boldsymbol{h}(\mathbf{x}, \bm{\eta})
-			&= 
-			[\,h(x_1,\bm{\eta}),\,h(x_2,\bm{\eta}),\,\ldots,\,h(x_N,\bm{\eta})\,]^{\mathrm{T}} \\
-			&= 
-			\big[
-			\beta_1 e^{-j\frac{2\pi}{\lambda}r_1(\bm{\eta})},\,
-			\beta_2 e^{-j\frac{2\pi}{\lambda}r_2(\bm{\eta})},\,
-			\ldots,\,
-			\beta_N e^{-j\frac{2\pi}{\lambda}r_N(\bm{\eta})}
-			\big]^{\mathrm{T}}.
-		\end{aligned}
-		\label{eq:hvector}
-	\end{equation}
-	
-	When the uniform path-loss assumption holds, \eqref{eq:hvector} simplifies to
-	\[
-	\boldsymbol{h}(\mathbf{x}, \bm{\eta})
-	= \beta\,\boldsymbol{\alpha}(\mathbf{x}, \bm{\eta}) \in \mathbb{C}^{N}.
-	\]
-	
+\section{Model, Exact FIM, and Closed-Form CRBs}
+Let $k=2\pi/\lambda$, element positions $\{x_m\}_{m=1}^N$, parameter vector $\bm{\eta}=[u,r]^\top$, and exact ranges
+\begin{equation}
+  r_m = \sqrt{\,r^2 - 2ru\,x_m + x_m^2\,}, 
+  \qquad d_m := r_m^2 .
+\end{equation}
+The per-element complex channel is
+\begin{equation}
+  h_m = \frac{1}{\sqrt{4\pi}\,r_m}\,e^{-j k r_m},
+\end{equation}
+and the signal model is $\mathbf y_t=s_t\,\mathbf h(\bm\eta)+\mathbf w_t$ with $\mathbf w_t\sim\mathcal{CN}(\mathbf 0,\sigma^2\mathbf I)$ and $E_s=\sum_t |s_t|^2$.
 
-	
-	In the joint estimation of the spatial angle-of-arrival (AoA) parameter $u$ and the distance $r$, the Cramér-Rao bounds (CRBs) are derived from the Fisher information matrix (FIM).
-	
+Using $\partial r_m/\partial u = -\tfrac{r x_m}{r_m}$ and $\partial r_m/\partial r = \tfrac{r-u x_m}{r_m}$, one has
+\begin{equation}
+  \frac{\partial h_m}{\partial q}
+  = h_m\!\left(-jk-\frac{1}{r_m}\right)\!\frac{\partial r_m}{\partial q},
+  \qquad q\in\{u,r\}.
+\end{equation}
+Hence the real-parameter FIM is
+\begin{equation}
+  \mathbf J(\bm\eta)=\frac{2E_s}{\sigma^2}\,
+  \Re\!\left\{\!\left(\frac{\partial\mathbf h}{\partial\bm\eta}\right)^{\!H}
+  \!\left(\frac{\partial\mathbf h}{\partial\bm\eta}\right)\!\right\} .
+\end{equation}
+Since $|h_m|^2=\tfrac{1}{4\pi r_m^2}$ and 
+$(jk+\tfrac{1}{r_m})(-jk-\tfrac{1}{r_m}) = k^2 + \tfrac{1}{r_m^2}$, each entry can be written as
+\begin{equation}
+\begin{aligned}
+  J_{pq}
+  &= \frac{2E_s}{\sigma^2}\sum_{m=1}^N 
+     \frac{1}{4\pi r_m^2}\!\left(k^2+\frac{1}{r_m^2}\right)
+     \frac{\partial r_m}{\partial p}\frac{\partial r_m}{\partial q} , \\
+  &\hspace{4.8cm} p,q\in\{u,r\}.
+\end{aligned}
+\end{equation}
 
-	\subsection{Fisher Information Matrix (FIM)}
-	
-	Let $k=\tfrac{2\pi}{\lambda}$ and $E_s=\sum_{t=1}^T |s_t|^2=PT$.
-	For the $m$-th element at $x_m$,
-	\[
-	r_m=\sqrt{r^2-2ru\,x_m+x_m^2},\quad
-	\frac{\partial r_m}{\partial u}=-\frac{r x_m}{r_m},\quad
-	\frac{\partial r_m}{\partial r}=\frac{r-u x_m}{r_m}.
-	\]
-	With
-	\(
-	h_m=\beta_m e^{-j\frac{2\pi}{\lambda}r_m}
-	=\frac{1}{\sqrt{4\pi}\,r_m}e^{-j\frac{2\pi}{\lambda}r_m},
-	\)
-	we have
-	\[
-	\frac{\partial h_m}{\partial q}
-	=h_m\!\left(-j\frac{2\pi}{\lambda}-\frac{1}{r_m}\right)\!\frac{\partial r_m}{\partial q},
-	\quad q\in\{u,r\}.
-	\]
-	Because $\mathbf{y}_t=s_t\mathbf{h}(\eta)+\mathbf{w}_t$, $\mathbf{w}_t\sim\mathcal{CN}(\mathbf{0},\sigma^2\mathbf{I})$,
-	the FIM is
-	\[
-	\mathbf{J}(\eta)=\frac{2E_s}{\sigma^2}\,
-	\Re\!\Big\{\!\Big(\tfrac{\partial\mathbf{h}}{\partial\eta}\Big)^{\!H}\!
-	\Big(\tfrac{\partial\mathbf{h}}{\partial\eta}\Big)\!\Big\}
-	=\begin{bmatrix}J_{uu}&J_{ur}\\J_{ur}&J_{rr}\end{bmatrix},
-	\]
-	whose entries simplify to
+Define positive weights
+\begin{equation}
+  w_m := \frac{E_s}{2\pi\sigma^2}\,\frac{k^2+\frac{1}{d_m}}{d_m^2},
+  \qquad S_0 := \sum_{m=1}^N w_m ,
+\end{equation}
+and weighted moments
+\begin{equation}
+  M_\ell := \sum_{m=1}^N w_m x_m^\ell,\quad 
+  \bar x := \frac{M_1}{M_0},\quad 
+  \overline{x^2} := \frac{M_2}{M_0},\quad M_0=S_0 .
+\end{equation}
+A direct substitution yields the compact FIM:
+\begin{equation}
+\label{eq:FIM-compact}
+\begin{aligned}
+  J_{uu} &= r^2 S_0\,\overline{x^2},\\
+  J_{rr} &= S_0\big(r^2 - 2ru\,\bar x + u^2\,\overline{x^2}\big),\\
+  J_{ur} &= -\,r S_0\big(r\,\bar x - u\,\overline{x^2}\big).
+\end{aligned}
+\end{equation}
 
-	\begin{align}
-		J_{uu}
-		&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-		\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
-		\frac{r^{2}x_m^{2}}{r_m^{4}}, \\
-		J_{rr}
-		&=\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-		\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
-		\frac{(r-u x_m)^{2}}{r_m^{4}}, \\
-		J_{ur}
-		&=-\frac{2E_s}{\sigma^2}\sum_{m=1}^N
-		\frac{1}{4\pi}\left[\left(\frac{2\pi}{\lambda}\right)^{\!2}+\frac{1}{r_m^{2}}\right]
-		\frac{r x_m\,(r-u x_m)}{r_m^{4}}.
-	\end{align}
-	
-	\begin{align}
-		J_{uu}
-		&=\frac{E_s}{2\pi\sigma^2}+N\left(\frac{2\pi}{\lambda}\right)^{\!2}+
-		\left(\sum_{m=1}^N\frac{1}{d_m}\right)
-		\frac{r^{2}x_m^{2}}{d_m^2}, \\
-		J_{rr}
-		&=\frac{E_s}{2\pi\sigma^2}+N\left(\frac{2\pi}{\lambda}\right)^{\!2}+
-		\left(\sum_{m=1}^N\frac{1}{d_m}\right)
-		\frac{(r-u x_m)^{2}}{d_m^2}, \\
-		J_{ur}
-		&=-\frac{E_s}{2\pi\sigma^2}+N\left(\frac{2\pi}{\lambda}\right)^{\!2}+
-		\left(\sum_{m=1}^N\frac{1}{d_m}\right)
-		\frac{r x_m\,(r-u x_m)}{d_m^2}.
-	\end{align}
-	
-	Note $d_m \triangleq r_m^{2} = r^2 - 2rux_m + x_m^2$
-	
-	\subsection{CRB Expressions}
-	The CRBs are
-	\begin{equation}
-		\mathrm{CRB}_u = \frac{J_{rr}}{J_{uu}J_{rr}-J_{ur}^2},\qquad
-		\mathrm{CRB}_r = \frac{J_{uu}}{J_{uu}J_{rr}-J_{ur}^2}.
-	\end{equation}
-	
-	
+The determinant follows from $S_0\overline{x^2}-S_0\bar x^2 = S_0^2\mathrm{var}_w(x)$, where
+\begin{equation}
+  \mathrm{var}_w(x) := \overline{x^2} - \bar x^2 ,
+\end{equation}
+namely
+\begin{equation}
+\label{eq:detJ}
+  \det\mathbf J
+  = J_{uu}J_{rr}-J_{ur}^2
+  = r^4 S_0^2\,\mathrm{var}_w(x).
+\end{equation}
+Therefore the CRBs take the closed forms
+\begin{equation}
+\label{eq:CRB-closed}
+\begin{aligned}
+  \mathrm{CRB}_u 
+  &= \frac{J_{rr}}{\det\mathbf J}
+   = \frac{r^2 - 2ru\,\bar x + u^2\,\overline{x^2}}
+          {r^4 S_0\,\mathrm{var}_w(x)},\\
+  \mathrm{CRB}_r 
+  &= \frac{J_{uu}}{\det\mathbf J}
+   = \frac{\overline{x^2}}{r^2 S_0\,\mathrm{var}_w(x)}.
+\end{aligned}
+\end{equation}
+Equivalently, using $\overline{x^2}=\bar x^2+\mathrm{var}_w(x)$,
+\begin{equation}
+\begin{aligned}
+  \mathrm{CRB}_u 
+  &= \frac{(r-u\bar x)^2 + u^2\,\mathrm{var}_w(x)}
+          {r^4 S_0\,\mathrm{var}_w(x)},\\
+  \mathrm{CRB}_r 
+  &= \frac{\bar x^2+\mathrm{var}_w(x)}
+          {r^2 S_0\,\mathrm{var}_w(x)}.
+\end{aligned}
+\end{equation}
+
+\section{Three-Point A-Optimal Design on $\{-a,0,+a\}$}
+We concentrate all design mass on $\{-a,0,+a\}$ with probabilities
+\begin{equation}
+  p_-,\; p_0,\; p_+ \;\ge\; 0,\qquad p_-+p_0+p_+=1 .
+\end{equation}
+Let the exact near-field kernel (constant factors irrelevant for optimal \emph{weights})
+\begin{equation}
+  \phi(x) := \frac{k^2+\frac{1}{r(x)^2}}{r(x)^4},
+  \qquad r(x) := \sqrt{r^2-2ru\,x+x^2},
+\end{equation}
+and denote
+\begin{equation}
+  \phi_- := \phi(-a),\quad \phi_0 := \phi(0),\quad \phi_+ := \phi(+a).
+\end{equation}
+Then
+\begin{equation}
+\begin{aligned}
+  S_0 &= p_- \phi_- + p_0 \phi_0 + p_+ \phi_+,\\
+  \bar x &= \frac{a(-p_- \phi_- + p_+ \phi_+)}{S_0},\\
+  \overline{x^2} &= \frac{a^2(p_- \phi_- + p_+ \phi_+)}{S_0}.
+\end{aligned}
+\end{equation}
+We adopt the A-optimal criterion $\,\mathrm{Tr}(\mathbf J^{-1})=\mathrm{CRB}_u+\mathrm{CRB}_r\,$ with \eqref{eq:CRB-closed}.
+
+\begin{lemma}[Balancing]
+\label{lem:balance}
+For fixed $(S_0,\overline{x^2})$, the function $\mathrm{Tr}(\mathbf J^{-1})$ is strictly convex in $\bar x$ and attains its unique minimum at $\bar x=0$. Consequently, every three-point A-optimal solution satisfies
+\begin{equation}
+  \bar x=0
+  \quad \Longleftrightarrow \quad
+  p_- \phi_- = p_+ \phi_+ .
+\end{equation}
+\end{lemma}
+
+\noindent\emph{Proof:} Differentiate $\mathrm{Tr}(\mathbf J^{-1})$ w.r.t.\ $\bar x$ under fixed $(S_0,\overline{x^2})$ using \eqref{eq:CRB-closed}; the derivative vanishes only at $\bar x=0$, and the second derivative is positive, implying strict convexity and the unique minimizer at $\bar x=0$. The equivalence follows from the expression of $\bar x$ above. \hfill$\square$
+
+Impose the balancing constraint by introducing
+\begin{equation}
+  t := p_- \phi_- = p_+ \phi_+ \in \Big(0,\, t_{\max}\Big],
+  \qquad 
+  t_{\max} := \frac{1}{\frac{1}{\phi_-}+\frac{1}{\phi_+}} .
+\end{equation}
+Then
+\begin{equation}
+  p_-=\frac{t}{\phi_-},\qquad 
+  p_+ = \frac{t}{\phi_+},\qquad 
+  p_0 = 1 - t\!\left(\frac{1}{\phi_-}+\frac{1}{\phi_+}\right).
+\end{equation}
+Under $\bar x=0$,
+\begin{equation}
+\begin{aligned}
+  S_0 &= 2t + p_0 \phi_0 
+       = \phi_0 + t\!\left(2 - \phi_0\!\left(\frac{1}{\phi_-}+\frac{1}{\phi_+}\right)\right) \\
+      &:= \phi_0 + A t,\\[2pt]
+  \overline{x^2} &= \frac{a^2 (p_- \phi_- + p_+ \phi_+)}{S_0}
+                 = \frac{2 a^2 t}{S_0}.
+\end{aligned}
+\end{equation}
+Using \eqref{eq:CRB-closed}, the trace simplifies to the one-dimensional objective
+\begin{equation}
+\label{eq:F-of-t}
+  \mathrm{Tr}(\mathbf J^{-1})
+  = \frac{1}{r^2}\left(\frac{C_1}{\phi_0 + A t} + \frac{1}{2 a^2 t}\right),
+  \qquad C_1 := 1 + \frac{u^2}{r^2}.
+\end{equation}
+The function in \eqref{eq:F-of-t} is strictly convex in $t>0$; its unique minimizer is either at the boundary $t=t_{\max}$ or at the stationary point where the derivative vanishes.
+
+\begin{theorem}[Exact three-point A-optimal weights]
+\label{thm:three-point}
+Let $A:= 2 - \phi_0\!\big(\tfrac{1}{\phi_-}+\tfrac{1}{\phi_+}\big)$ and $t_{\max}=(\tfrac{1}{\phi_-}+\tfrac{1}{\phi_+})^{-1}$. The unique minimizer of $\mathrm{Tr}(\mathbf J^{-1})$ over $(p_-,p_0,p_+)\in\mathbb{R}_+^3$ with $p_-+p_0+p_+=1$ is characterized as follows:
+\begin{equation}
+\label{eq:opt-cases}
+\begin{aligned}
+\text{If } & A \ge 0: 
+& t^\star &= t_{\max},\quad p_0^\star=0,\\[-1pt]
+&& p_-^\star &= \frac{\phi_+}{\phi_-+\phi_+},\quad
+   p_+^\star = \frac{\phi_-}{\phi_-+\phi_+}.\\[4pt]
+\text{If } & A < 0:
+& t^\star &= \min\!\left\{\frac{\phi_0}{B+\sqrt{2 a^2 C_1 B}}\;,\;t_{\max}\right\},\\[-1pt]
+&& p_-^\star &= \frac{t^\star}{\phi_-},\quad
+   p_+^\star = \frac{t^\star}{\phi_+},\\[-1pt]
+&& p_0^\star &= 1 - t^\star\!\left(\frac{1}{\phi_-}+\frac{1}{\phi_+}\right),
+\end{aligned}
+\end{equation}
+where $B:=-A>0$ and $C_1=1+u^2/r^2$.
+\end{theorem}
+
+\noindent\emph{Proof:}
+Consider $F(t) := \tfrac{C_1}{\phi_0+At} + \tfrac{1}{2 a^2 t}$ on $t\in(0,t_{\max}]$.
+\begin{equation}
+  F'(t) = -\,\frac{C_1 A}{(\phi_0 + A t)^2} - \frac{1}{2 a^2 t^2}.
+\end{equation}
+If $A\ge 0$ then $F'(t)<0$ for all $t>0$; the minimum is at $t^\star=t_{\max}$, which implies $p_0^\star=0$ and the two-endpoint solution with unequal weights in \eqref{eq:opt-cases}. If $A<0$ let $B:=-A>0$. The unique interior stationary point solves
+\begin{equation}
+  \frac{C_1 B}{(\phi_0 - B t)^2} = \frac{1}{2 a^2 t^2},
+\end{equation}
+which yields
+\begin{equation}
+  t^\star = \frac{\phi_0}{B + \sqrt{2 a^2 C_1 B}}.
+\end{equation}
+Feasibility requires $t^\star \le t_{\max}$; otherwise the minimum occurs at $t_{\max}$. Substituting $t^\star$ back gives the weights in \eqref{eq:opt-cases}. \hfill$\square$
+
+\section{Closed-Form Optimal CRBs at the Solution}
+When $A\ge 0$, the optimal design uses only the two endpoints with ratio $p_-^\star:p_+^\star=\phi_+:\phi_-$. In this case
+\begin{equation}
+  S_0^\star = \frac{2\,\phi_- \phi_+}{\phi_-+\phi_+},
+  \qquad
+  \overline{x^2}^\star = a^2,
+\end{equation}
+and thus
+\begin{equation}
+\begin{aligned}
+  \mathrm{CRB}_r^\star 
+  &= \frac{1}{r^2 S_0^\star}
+   = \frac{\phi_-+\phi_+}{2 r^2 \phi_- \phi_+},\\
+  \mathrm{CRB}_u^\star 
+  &= \frac{r^2 + u^2 a^2}{r^4 S_0^\star a^2}.
+\end{aligned}
+\end{equation}
+When $A<0$ and $t^\star<t_{\max}$, one obtains $S_0^\star=\phi_0 + A t^\star$ and $\overline{x^2}^\star=2 a^2 t^\star/S_0^\star$, which may be substituted into \eqref{eq:CRB-closed} to report the optimal CRBs in closed form.
+
+\section{Remarks}
+(i) The entire derivation holds under the exact near-field law, i.e., \emph{without} any Fresnel/Taylor truncation. All geometry enters through the exact kernel $\phi(\cdot)$ and the weights $w_m$. 
+(ii) The balancing condition $\bar x=0$ eliminates first-order coupling in $\mathrm{CRB}_u$ and maximizes the determinant \eqref{eq:detJ} via $\mathrm{var}_w(x)$, explaining why the optimizer either avoids the center or assigns to it a provably small mass in the regime $A<0$.
+(iii) In the USW limit $\phi_-=\phi_+=\phi_0$, one gets $A=0$ and recovers the classical two-endpoint, equal-weight solution.
