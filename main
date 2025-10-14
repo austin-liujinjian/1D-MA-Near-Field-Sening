@@ -1,99 +1,91 @@
-% example parameters
-lambda = 8e-3;         % 8 mm
-a      = 10*lambda;    % half-aperture
-theta  = acos(0.6);    % pick u=0.6, so theta=acos(0.6)
-r      = 10;           % 10 m
+lambda = 8e-3;          % 8 mm
+a      = 10*lambda;     % half-aperture
+u      = 0.6;           % cos(theta)
+theta  = acos(u);
+r      = 10;            % meters
 
-% mode = 'PA' (g=a) or 'MIMO' (g=a⊗a); grid step 0.005 is usually fine
-[p1_opt, p0_opt, Tr_min] = search_p1_p0_minTrCRB(theta, r, lambda, a, ...
-                                'PA', 0.005, 1e-5, 1e-4);
+% mode = 'PA' or 'MIMO'
+[p1_opt, p0_opt, Tr_min] = search_p1_p0_minTrCRB_with_amp(theta, r, lambda, a, ...
+                                    'PA', 0.005, 1e-6, 1e-6*max(r,1));
 
-
-
-function [p1_star, p0_star, TrCRB_min] = search_p1_p0_minTrCRB(theta, r, lambda, a, ...
+function [p1_star, p0_star, TrCRB_min] = search_p1_p0_minTrCRB_with_amp(theta, r, lambda, a, ...
     mode, gridStep, epsTheta, epsR)
-%SEARCH_P1_P0_MINTRCRB
-%  Numerically searches (p1, p0) on a 2D grid to minimize Tr(CRB)
-%  under the page-1 unified CRB formulas (Eqs. (20)–(22) in the paper).
+% Page-1 CRB search over (p1,p0) with 1/r amplitude kept.
+% Support locations: {-a, 0, +a}; weights: [p1, p0, p2=1-p1-p0].
+% Follows the generic page-1 CRB forms: uses g, g_theta, g_r only.
 %
-%  INPUTS
-%    theta   : AoA parameter (rad) used in g(r,theta)
-%    r       : range (m)
-%    lambda  : wavelength (m)
-%    a       : half-aperture for the 3-point support at {-a, 0, +a}
-%    mode    : 'MIMO' (g = a ⊗ a) or 'PA' (phased-array, g = a)
-%              -- this is just a convenient example builder for g(r,theta);
-%              you can replace g_builder() with your own black-box.
-%    gridStep: step for p1 and p0 (e.g. 0.005)
-%    epsTheta: finite-difference step for theta (e.g. 1e-5)
-%    epsR    : finite-difference step for r (e.g. 1e-4)
+% INPUTS
+%   theta   : AoA in radians (used via cos(theta))
+%   r       : range (m)
+%   lambda  : wavelength (m)
+%   a       : half aperture (m); support at x = {-a,0,+a}
+%   mode    : 'PA'  -> g = a_w              (phased-array like)
+%             'MIMO'-> g = kron(a_w,a_w)    (example composite)
+%   gridStep: step for p1 & p0 grid (e.g., 0.005)
+%   epsTheta: finite-diff step for theta (e.g., 1e-6)
+%   epsR    : finite-diff step for r (e.g., 1e-6*max(r,1))
 %
-%  OUTPUTS
-%    p1_star    : optimal left weight (at x=-a)
-%    p0_star    : optimal center weight (at x=0)
-%    TrCRB_min  : minimal Tr(CRB) found on the grid
+% OUTPUTS
+%   p1_star, p0_star : minimizing weights for left & center
+%   TrCRB_min        : minimal Tr(CRB) found
 
-if nargin < 6 || isempty(gridStep), gridStep = 0.005; end
-if nargin < 7 || isempty(epsTheta), epsTheta = 1e-5;  end
-if nargin < 8 || isempty(epsR),     epsR     = 1e-4;  end
+if nargin < 5 || isempty(mode),      mode = 'PA';           end
+if nargin < 6 || isempty(gridStep),  gridStep = 0.005;      end
+if nargin < 7 || isempty(epsTheta),  epsTheta = 1e-6;       end
+if nargin < 8 || isempty(epsR),      epsR     = 1e-6*max(r,1); end
 
-% --- 3 support locations: left, center, right
+% 3-point support
 xs = [-a, 0, +a];
 
-% --- initialize best record
+% best-so-far
 TrCRB_min = inf; p1_star = NaN; p0_star = NaN;
 
-% --- predefine a small helper to compute Tr(CRB) from g,gθ,gr via Eqs. (20)–(22)
+% --- helper: Tr(CRB) from {g, gθ, gr} via page-1 formula
     function TrCRB = trCRB_from_g(g, gth, gr)
-        % norms
         ng   = norm(g);
         ngth = norm(gth);
         ngr  = norm(gr);
 
-        % sin^2Ω and sin^2Θ (Eq. (20))
-        sin2Omega = 1 - (abs(gth'*g)^2)/(ngth^2 * ng^2 + eps);
-        sin2Theta = 1 - (abs(gr' *g)^2)/(ngr^2  * ng^2 + eps);
+        % sin^2Ω and sin^2Θ  (projection rejections)
+        sin2Omega = max(1 - (abs(gth'*g)^2)/(ngth^2*ng^2 + eps), 0);
+        sin2Theta = max(1 - (abs(gr' *g)^2)/(ngr^2 *ng^2 + eps), 0);
 
-        % W = (gθ^H gr) I - gθ gr^H  (Eq. (20))
-        Ghg = (gth' * gr);
-        Wg  = Ghg * g - gth * (gr' * g);
-        Rgg = real(g' * Wg);
+        % W = (gθ^H gr) I - gθ gr^H ;  Q12 = Re{ g^H W g } / ||g||^2
+        Ghg  = (gth' * gr);
+        Wg   = Ghg * g - gth * (gr' * g);
 
-        % Q' entries (Eq. (20))
-        Q11 = ngth^2 * sin2Omega;
-        Q22 = ngr^2  * sin2Theta;
-        Q12 = Rgg / (ng^2 + eps);
+        Q11  = ngth^2 * sin2Omega;
+        Q22  = ngr^2  * sin2Theta;
+        Q12  = real(g' * Wg) / (ng^2 + eps);
 
-        detQp = Q11*Q22 - Q12^2;         % det Q'
-        % Up to a common positive scale (N0 / (2|ρ|^2)) which
-        % does not affect argmin over (p1,p0):
-        CRB_theta = Q22 / (detQp + eps);
-        CRB_r     = Q11 / (detQp + eps);
+        detQp = Q11*Q22 - Q12^2;
+
+        % numerical guard for robustness
+        det_guard = 1e-14*(Q11*Q22 + Q12^2 + eps);
+        detQp = max(detQp, det_guard);
+
+        % common factor N0/(2|rho|^2) cancels for argmin over (p1,p0)
+        CRB_theta = Q22 / detQp;
+        CRB_r     = Q11 / detQp;
         TrCRB     = CRB_theta + CRB_r;   % A-optimal metric
     end
 
-% --- builder for g(r,theta) given weights p = [p1,p0,p2]
-% NOTE: This is just a convenient example consistent with page-1 usage:
-%       we construct an array response a(r,theta) with spherical phases and 1/r amplitude,
-%       then set g = a (phased-array, 'PA') or g = kron(a, a) ('MIMO').
+% --- builder: g(r,theta) given weights p = [p1, p0, p2]
+% KEEP 1/r amplitude: a_m = (1/r_m) * exp(-j 2π r_m / λ)
     function g = g_builder(theta_, r_, p)
-        % per-element distance to target (exact spherical distance)
-        rm = sqrt(r_^2 - 2*r_*cos(theta_)*xs + xs.^2);   % r(x) with u = cos(theta)
-        % simple near-field response per element (amplitude ~ 1/rm, phase exp(-j2π rm/λ))
-        a_vec = (1./rm) .* exp(-1j*2*pi*rm/lambda);
-
-        % apply weights on the 3 “atoms” at {-a,0,+a}
-        a_w = sqrt(p(:)).' .* a_vec;     % sqrt-p scaling is optional; you can also use p(:).'
+        rm   = sqrt(r_^2 - 2*r_*cos(theta_)*xs + xs.^2);   % exact spherical distance
+        a_vec= (1./rm) .* exp(-1j*2*pi*rm/lambda);         % <-- keep 1/r amplitude
+        a_w  = (p(:)).' .* a_vec;                          % linear weights (NOT sqrt)
 
         switch upper(mode)
             case 'MIMO'
-                g = kron(a_w, a_w).';    % column vector
-            otherwise  % 'PA'
-                g = a_w.';               % column vector
+                g = kron(a_w, a_w).';   % column vector
+            otherwise % 'PA'
+                g = a_w.';              % column vector
         end
     end
 
-% --- grid over p1 in [0,1], p0 in [0,1-p1]; p2 = 1 - p1 - p0
+% --- grid over feasible triangle: p1>=0, p0>=0, p2=1-p1-p0>=0
 pVals = 0:gridStep:1;
 for p1 = pVals
     p0_max = 1 - p1;
@@ -105,7 +97,7 @@ for p1 = pVals
 
         p = [p1, p0, p2];
 
-        % central finite-difference for gθ and gr (page-1 only needs g,gθ,gr)
+        % central finite differences for gθ and gr
         g    = g_builder(theta, r, p);
         g_th = (g_builder(theta+epsTheta, r, p) - g_builder(theta-epsTheta, r, p))/(2*epsTheta);
         g_r  = (g_builder(theta, r+epsR, p)     - g_builder(theta, r-epsR, p)    )/(2*epsR);
