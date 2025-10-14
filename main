@@ -1,117 +1,156 @@
-lambda = 8e-3;          % 8 mm
-a      = 10*lambda;     % half-aperture
-u      = 0.6;           % cos(theta)
-theta  = acos(u);
-r      = 10;            % meters
+% ========================= LaTeX fragment begins =========================
+\section{A-Optimal Near-Field Array Design via Measure Lifting}
 
-% mode = 'PA' or 'MIMO'
-[p1_opt, p0_opt, Tr_min] = search_p1_p0_minTrCRB_with_amp(theta, r, lambda, a, ...
-                                    'PA', 0.005, 1e-6, 1e-6*max(r,1));
+\subsection{Exact Model, Fisher Information, and the Weight Kernel}
+Let $k=2\pi/\lambda$, the target parameter $\eta=[u,r]^\top$ with $u=\cos\theta$,
+and the $m$-th element located at $x_m\in[-a,a]$. The exact distance is
+\[
+r_m=\sqrt{r^2-2ru\,x_m+x_m^2},\qquad 
+\beta_m=\frac{1}{\sqrt{4\pi}\,r_m},\qquad
+h_m=\beta_m e^{-jkr_m}.
+\]
+Under complex Gaussian noise and LOS single-path, the Fisher information
+for $(u,r)$ admits the near-field closed forms (omitted here for brevity),
+from which one can factor out a \emph{positive kernel} $\phi(x;u,r)$:
+\begin{equation}\label{eq:phi}
+\phi(x;u,r)\ \propto\ \frac{k^2+\frac{1}{r(x)^2}}{r(x)^4},\qquad
+r(x):=\sqrt{r^2-2ru\,x+x^2},
+\end{equation}
+where global positive constants are irrelevant for A-optimality.
 
-function [p1_star, p0_star, TrCRB_min] = search_p1_p0_minTrCRB_with_amp(theta, r, lambda, a, ...
-    mode, gridStep, epsTheta, epsR)
-% Page-1 CRB search over (p1,p0) with 1/r amplitude kept.
-% Support locations: {-a, 0, +a}; weights: [p1, p0, p2=1-p1-p0].
-% Follows the generic page-1 CRB forms: uses g, g_theta, g_r only.
-%
-% INPUTS
-%   theta   : AoA in radians (used via cos(theta))
-%   r       : range (m)
-%   lambda  : wavelength (m)
-%   a       : half aperture (m); support at x = {-a,0,+a}
-%   mode    : 'PA'  -> g = a_w              (phased-array like)
-%             'MIMO'-> g = kron(a_w,a_w)    (example composite)
-%   gridStep: step for p1 & p0 grid (e.g., 0.005)
-%   epsTheta: finite-diff step for theta (e.g., 1e-6)
-%   epsR    : finite-diff step for r (e.g., 1e-6*max(r,1))
-%
-% OUTPUTS
-%   p1_star, p0_star : minimizing weights for left & center
-%   TrCRB_min        : minimal Tr(CRB) found
+\subsection{Measure Lifting: from $\mu$ to $\zeta=\phi\,\mu$}
+Let the array design be a nonnegative measure $\mu$ supported on $[-a,a]$.
+Define the \emph{lifted} measure
+\[
+d\zeta(x):=\phi(x;u,r)\,d\mu(x),\qquad \phi>0\ \text{known}.
+\]
+Introduce the first three moments of $\zeta$:
+\[
+m_\ell:=\int x^\ell\,d\zeta(x),\qquad \ell=0,1,2.
+\]
+Denote $\bar x:=m_1/m_0$ and $x^2:=m_2/m_0$, and $\operatorname{var}_\zeta(x):=x^2-\bar x^2$.
+Then the Fisher information matrix and the A-optimal trace simplify to
+\begin{align}
+&J_{uu}=r^2\,m_2/m_0\cdot m_0=r^2 m_2,\label{eq:Juu}\\
+&J_{rr}=m_0\Big(r^2-2ru\,\bar x+u^2 x^2\Big),\label{eq:Jrr}\\
+&J_{ur}=-r\,m_0\Big(r\bar x-u x^2\Big),\label{eq:Jur}\\
+&\det J=r^4 m_0^2\,\operatorname{var}_\zeta(x),\label{eq:detJ}\\
+&\mathrm{CRB}_u=\frac{(r-u\bar x)^2+u^2\operatorname{var}_\zeta(x)}{r^4 m_0\,\operatorname{var}_\zeta(x)},\quad
+\mathrm{CRB}_r=\frac{\bar x^2+\operatorname{var}_\zeta(x)}{r^2 m_0\,\operatorname{var}_\zeta(x)},\nonumber\\
+&\mathrm{Tr}\!\big(J^{-1}\big)=\mathrm{CRB}_u+\mathrm{CRB}_r.\label{eq:trace}
+\end{align}
+\textbf{Key point:} the dependence $w(x)\equiv\phi(x;u,r)$ on $x$ is fully absorbed into $\zeta$;
+the objective depends only on $(m_0,m_1,m_2)$ of $\zeta$.
+Optimality in $\mu$ is equivalent to optimality in $\zeta$, and the physical design is recovered by
+\[
+\mu^\star(d x)=\frac{\zeta^\star(d x)}{\phi(x;u,r)}.
+\]
 
-if nargin < 5 || isempty(mode),      mode = 'PA';           end
-if nargin < 6 || isempty(gridStep),  gridStep = 0.005;      end
-if nargin < 7 || isempty(epsTheta),  epsTheta = 1e-6;       end
-if nargin < 8 || isempty(epsR),      epsR     = 1e-6*max(r,1); end
+\subsection{Atomicity: At Most Three Support Points}
+Because $\mathrm{Tr}(J^{-1})$ depends only on $(m_0,m_1,m_2)$,
+the feasible set of moment triples is a convex set in $\mathbb{R}^3$.
+By the finite-moment extremal theorems (e.g., Tchakaloff / Richter--Rogosinski),
+there exists an optimal measure $\zeta^\star$ supported on at most
+$\dim\mathrm{span}\{1,x,x^2\}=3$ points.
+Hence there exists an A-optimal design $\mu^\star$ with at most three atoms:
+\begin{equation}
+\boxed{\ \ \mathrm{supp}(\mu^\star)\ \text{has cardinality}\ \le 3\ \ }.
+\end{equation}
 
-% 3-point support
-xs = [-a, 0, +a];
+\subsection{Equivalent-Design Conditions and Balancing}
+Let the candidate support be $\{-a,0,+a\}$.
+Write $\phi_\pm:=\phi(\pm a;u,r)$, $\phi_0:=\phi(0;u,r)$.
+Let the lifted masses be $\zeta(\{-a\})=t_-$, $\zeta(\{+a\})=t_+$, $\zeta(\{0\})=t_0$.
+The \emph{equivalence theorem} (Kiefer--Wolfowitz) implies that the sensitivity
+attains its maximum at support points, and first-order stationarity yields the
+\emph{balancing} condition on $\zeta$:
+\begin{equation}\label{eq:balance-zeta}
+m_1^\star=0\ \Longleftrightarrow\ t_- = t_+.
+\end{equation}
+Under \eqref{eq:balance-zeta}, we may parameterize $t:=t_-=t_+\in(0,t_{\max}]$ and have
+\begin{equation}\label{eq:m0m2}
+m_0=t_0+2t,\qquad m_2=2a^2 t.
+\end{equation}
+Define
+\begin{equation}\label{eq:Adef}
+A:=2-\phi_0\Big(\frac{1}{\phi_-}+\frac{1}{\phi_+}\Big),\qquad 
+C_1:=1+\frac{u^2}{r^2},\qquad
+t_{\max}:=\Big(\frac{1}{\phi_-}+\frac{1}{\phi_+}\Big)^{-1}.
+\end{equation}
+Using \eqref{eq:trace}--\eqref{eq:m0m2},
+the A-optimal trace reduces to the strictly convex one-dimensional problem
+\begin{equation}\label{eq:1d-prob}
+\mathrm{Tr}\!\big(J^{-1}\big)
+=\frac{1}{r^2}\left(\frac{C_1}{\phi_0+A t}\ +\ \frac{1}{2a^2 t}\right),\qquad t\in(0,t_{\max}].
+\end{equation}
 
-% best-so-far
-TrCRB_min = inf; p1_star = NaN; p0_star = NaN;
+\subsection{Closed-Form Optimal Weights (Two Cases)}
+\paragraph*{Case A $\ge 0$ (generic)} 
+$\ \ \ $The objective \eqref{eq:1d-prob} is strictly decreasing in $t$,
+hence $t^\star=t_{\max}$ and $t_0^\star=0$.
+Thus the \emph{lifted} optimal design uses only the endpoints with equal lifted masses:
+\[
+\zeta^\star(\{-a\})=\zeta^\star(\{+a\})=t_{\max},\qquad \zeta^\star(\{0\})=0.
+\]
+Mapping back to the physical masses $p_i^\star=\mu^\star(\{x_i\})=\zeta^\star(\{x_i\})/\phi_i$, we obtain
+\begin{equation}\label{eq:mu-case1}
+p_-^\star=\frac{t_{\max}}{\phi_-}=\frac{\phi_+}{\phi_-+\phi_+},\quad
+p_+^\star=\frac{t_{\max}}{\phi_+}=\frac{\phi_-}{\phi_-+\phi_+},\quad
+p_0^\star=0.
+\end{equation}
 
-% --- helper: Tr(CRB) from {g, gθ, gr} via page-1 formula
-    function TrCRB = trCRB_from_g(g, gth, gr)
-        ng   = norm(g);
-        ngth = norm(gth);
-        ngr  = norm(gr);
+\paragraph*{Case A $< 0$} 
+$\ \ \ $There exists a unique interior minimizer:
+\begin{equation}\label{eq:tstar}
+t^\star=\min\left\{\ \frac{\phi_0}{\,B+\sqrt{2a^2 C_1 B}\,}\ ,\ t_{\max}\right\},\qquad B:=-A>0,
+\end{equation}
+with $t_0^\star=m_0^\star-2t^\star=\big(\phi_0 + A t^\star\big)-2t^\star$ (from $m_0$).
+Mapping back to $\mu$:
+\begin{equation}\label{eq:mu-case2}
+p_-^\star=\frac{t^\star}{\phi_-},\qquad
+p_+^\star=\frac{t^\star}{\phi_+},\qquad
+p_0^\star=1-t^\star\!\left(\frac{1}{\phi_-}+\frac{1}{\phi_+}\right).
+\end{equation}
 
-        % sin^2Ω and sin^2Θ  (projection rejections)
-        sin2Omega = max(1 - (abs(gth'*g)^2)/(ngth^2*ng^2 + eps), 0);
-        sin2Theta = max(1 - (abs(gr' *g)^2)/(ngr^2 *ng^2 + eps), 0);
+\subsection{When Are Three Points Insufficient?}
+The ``$\le3$ atoms'' result hinges on the fact that $\mathrm{Tr}(J^{-1})$ depends only on
+$(m_0,m_1,m_2)$ of the \emph{lifted} measure $\zeta$.
+Three-point may become \emph{insufficient} in the following situations:
+\begin{itemize}
+\item \textbf{Multi-scenario minimax design}: if one seeks a single $\mu$ optimal for a continuum
+$\mathcal{U}\subset[0,1)\times\mathbb{R}_+$ of $(u,r)$ (e.g., worst-case A-optimality over $\mathcal{U}$),
+the objective involves a supremum or an integral over $(u,r)$, which introduces
+\emph{more than three} effective moment constraints; the extremal support bound increases accordingly.
+\item \textbf{Augmented criteria/constraints}: adding penalties or constraints that depend on higher moments
+(e.g., aperture regularizers on $x^4$, robustness terms) enlarges the feature space
+$\mathrm{span}\{1,x,x^2,x^4,\dots\}$; the atomic bound becomes ``$\le$ (feature dimension)''.
+\item \textbf{Coupling with per-element hardware constraints}: if element-wise bounds enter \emph{inside}
+the expectation in a non-affine way (e.g., mutual coupling models, nonlinear distortion),
+the objective may no longer be a function of finitely many moments; then $>$3 atoms may be required.
+\end{itemize}
 
-        % W = (gθ^H gr) I - gθ gr^H ;  Q12 = Re{ g^H W g } / ||g||^2
-        Ghg  = (gth' * gr);
-        Wg   = Ghg * g - gth * (gr' * g);
-
-        Q11  = ngth^2 * sin2Omega;
-        Q22  = ngr^2  * sin2Theta;
-        Q12  = real(g' * Wg) / (ng^2 + eps);
-
-        detQp = Q11*Q22 - Q12^2;
-
-        % numerical guard for robustness
-        det_guard = 1e-14*(Q11*Q22 + Q12^2 + eps);
-        detQp = max(detQp, det_guard);
-
-        % common factor N0/(2|rho|^2) cancels for argmin over (p1,p0)
-        CRB_theta = Q22 / detQp;
-        CRB_r     = Q11 / detQp;
-        TrCRB     = CRB_theta + CRB_r;   % A-optimal metric
-    end
-
-% --- builder: g(r,theta) given weights p = [p1, p0, p2]
-% KEEP 1/r amplitude: a_m = (1/r_m) * exp(-j 2π r_m / λ)
-    function g = g_builder(theta_, r_, p)
-        rm   = sqrt(r_^2 - 2*r_*cos(theta_)*xs + xs.^2);   % exact spherical distance
-        a_vec= (1./rm) .* exp(-1j*2*pi*rm/lambda);         % <-- keep 1/r amplitude
-        a_w  = (p(:)).' .* a_vec;                          % linear weights (NOT sqrt)
-
-        switch upper(mode)
-            case 'MIMO'
-                g = kron(a_w, a_w).';   % column vector
-            otherwise % 'PA'
-                g = a_w.';              % column vector
-        end
-    end
-
-% --- grid over feasible triangle: p1>=0, p0>=0, p2=1-p1-p0>=0
-pVals = 0:gridStep:1;
-for p1 = pVals
-    p0_max = 1 - p1;
-    p0Vals = 0:gridStep:p0_max;
-
-    for p0 = p0Vals
-        p2 = 1 - p1 - p0;
-        if p2 < 0, continue; end
-
-        p = [p1, p0, p2];
-
-        % central finite differences for gθ and gr
-        g    = g_builder(theta, r, p);
-        g_th = (g_builder(theta+epsTheta, r, p) - g_builder(theta-epsTheta, r, p))/(2*epsTheta);
-        g_r  = (g_builder(theta, r+epsR, p)     - g_builder(theta, r-epsR, p)    )/(2*epsR);
-
-        TrC = trCRB_from_g(g, g_th, g_r);
-
-        if isfinite(TrC) && TrC < TrCRB_min
-            TrCRB_min = TrC;
-            p1_star   = p1;
-            p0_star   = p0;
-        end
-    end
-end
-
-fprintf('Best (p1,p0,p2) = (%.4f, %.4f, %.4f);  min Tr(CRB) = %.6e\n', ...
-        p1_star, p0_star, 1-p1_star-p0_star, TrCRB_min);
-end
+\subsection{When Do Weights Become Asymmetric or Center-Heavy?}
+Let $\phi_-\neq\phi_+$ (generic $u\neq0$).
+The \emph{balancing} holds in the lifted space: $\zeta^\star(\{-a\})=\zeta^\star(\{+a\})$,
+yet the physical masses differ because $\mu^\star=\zeta^\star/\phi$:
+\[
+\frac{p_-^\star}{p_+^\star}=\frac{\phi_+}{\phi_-}.
+\]
+Therefore, \emph{right-heavy} designs ($p_+^\star>p_-^\star$) occur whenever $\phi_+<\phi_-$
+(i.e., the right endpoint is \emph{less} attenuated in $\phi$).
+In Case $A\ge0$, \eqref{eq:mu-case1} shows $p_0^\star=0$ and typically $p_-^\star\neq p_+^\star$
+unless $\phi_-=\phi_+$ (symmetric look).
+In Case $A<0$, \eqref{eq:mu-case2} gives $p_0^\star>0$; the center can dominate when
+\[
+\phi_0\ \text{is large relative to}\ \phi_\pm,\quad\text{and}\quad
+C_1=1+\frac{u^2}{r^2}\ \text{is small},
+\]
+which together shrink $t^\star$ in \eqref{eq:tstar} and enlarge $p_0^\star$.
+Quantitatively, \emph{center-heavy} occurs if
+\[
+p_0^\star\ >\ p_-^\star+p_+^\star\ \Longleftrightarrow\
+1\ >\ 2t^\star\Big(\tfrac{1}{\phi_-}+\tfrac{1}{\phi_+}\Big).
+\]
+Conversely, \emph{endpoint-only} appears for $A\ge0$; \emph{balanced endpoints} ($p_-^\star=p_+^\star$)
+requires $\phi_-=\phi_+$ (e.g., symmetric broadside), while generic $u\ne0$ yields $p_-^\star\ne p_+^\star$.
+% ========================= LaTeX fragment ends =========================
