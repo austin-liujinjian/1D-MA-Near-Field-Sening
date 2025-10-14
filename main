@@ -1,13 +1,10 @@
-function compare_snr_curve_multi()
+function compare_snr_curve_multi_center_sweep()
 clc; clear;
 
 %% ================================================================
 %  Fixed system parameters (Section II model)
-%  ---------------------------------------------------------------
-%  λ  : wavelength, k : wave number 2π/λ
-%  r  : target range, u : directional cosine (u = cosθ)
-%  a  : array half-aperture
-%  Es : signal energy (used in SNR = Es/σ²)
+%  λ: wavelength, k: 2π/λ, r: range, u: AoA cosine, a: half-aperture
+%  Es: signal energy (SNR = Es/σ²)
 % ================================================================
 lambda = 8e-3;
 k      = 2*pi/lambda;
@@ -21,23 +18,23 @@ Es     = 1;
 % ================================================================
 SNRdB = linspace(-10, 30, 41);
 SNR   = 10.^(SNRdB/10);
-sigma2_list = Es ./ SNR;  % σ² = Es / SNR
+sigma2_list = Es ./ SNR;    % σ² = Es / SNR
 
 %% ================================================================
-%  Exact near-field distance and kernel ϕ(x)  (Eq. (22))
-%  r(x) = sqrt(r^2 - 2 r u x + x^2)
-%  ϕ(x) = (k^2 + 1/r(x)^2) / r(x)^4
+%  Exact near-field kernel φ(x) per Eq. (22):
+%  r(x) = sqrt(r^2 - 2 r u x + x^2),
+%  φ(x) = (k^2 + 1/r(x)^2) / r(x)^4
 % ================================================================
 r_of_x   = @(x) sqrt(r^2 - 2*r*u*x + x.^2);
 phi_core = @(x) (k^2 + 1./(r_of_x(x).^2)) ./ (r_of_x(x).^4);
 
-% Helper to compute CRBu, CRBr, Tr(J^{-1}) for a support {x_m, p_m}
+% Helper to compute CRBu, CRBr, Tr(J^{-1}) for {x_m, p_m}
 CRB_from_support = @(xs, ps, sigma2) ...
     metric_from_support(xs, ps, phi_core, r_of_x, r, u, Es, sigma2);
 
 %% ================================================================
 %  Geometry A: Symmetric three-point with optimal weights (Theorem 1)
-%  Support = {-a, 0, +a}; weights decided by A≥0 vs A<0 (Eqs. (24)–(33))
+%  Support = {-a, 0, +a}; Eqs. (24)–(33)
 % ================================================================
 x_minus = -a; x_zero = 0; x_plus = +a;
 phi_m = phi_core(x_minus);
@@ -64,53 +61,54 @@ xs_opt = [x_minus, x_zero, x_plus];
 ps_opt = [p_minus, p0,     p_plus];
 
 %% ================================================================
-%  Geometry B: Right-edge clustered (degenerate)
-%  Nearly co-located at +a (det(J) → 0 ⇒ large CRB)
-% ================================================================
-delta = 1e-3 * a;
-xs_right = [a - delta, a];
-ps_right = [0.5, 0.5];
-
-%% ================================================================
-%  Geometry C: ULA over [-a, a] with N elements, equal weights
-%  You can change N to any integer ≥ 2
+%  Geometry B: ULA over [-a, a] with N elements, equal weights
 % ================================================================
 N_ULA   = 16;
-xs_ula  = linspace(-a, a, N_ULA);   % uniform positions
-ps_ula  = ones(1, N_ULA) / N_ULA;   % equal weights
+xs_ula  = linspace(-a, a, N_ULA);         % uniform grid
+ps_ula  = ones(1, N_ULA) / N_ULA;         % equal weights
 
 %% ================================================================
-%  Geometry D: Three-point with equal endpoints only
-%  Support = {-a, +a}, p_- = p_+ = 0.5  (center inactive)
-%  NOTE: Left/right equal here ignores φ-asymmetry, thus x̄≠0 in general.
+%  Geometry C: Two-point equal endpoints (no center)
 % ================================================================
 xs_eq2  = [-a, +a];
 ps_eq2  = [0.5, 0.5];
 
 %% ================================================================
-%  Geometry E: Three-point with equal weights across {-a, 0, +a}
-%  p_- = p_0 = p_+ = 1/3
+%  Geometry D: Three-point equal weights {-a, 0, +a}
 % ================================================================
 xs_eq3  = [-a, 0, +a];
 ps_eq3  = [1/3, 1/3, 1/3];
+
+%% ================================================================
+%  NEW Geometry E (family): equal endpoints, tunable center p0 ∈ [0,1]
+%  Constraint: p_- = p_+ = (1 - p0) / 2,   p0 ∈ [0,1]
+%  For each SNR, we search p0 that minimizes Tr(J^{-1}) in this family.
+% ================================================================
+xs_sweep = [-a, 0, +a];
+p0_grid  = linspace(0, 1, 101);     % dense grid for envelope
+Tr_sweep = zeros(length(p0_grid), 1);
 
 %% ================================================================
 %  Compute Tr(J^{-1}) vs SNR for all geometries
 % ================================================================
 names = { ...
     'Optimal symmetric 3-point', ...
-    'Clustered near +a', ...
     sprintf('ULA (%d pts)', N_ULA), ...
     '2-point equal endpoints', ...
-    '3-point equal weights' ...
+    '3-point equal weights', ...
+    'Equal-ends + tuned center (envelope)' ...
 };
 
-Xsets = {xs_opt, xs_right, xs_ula, xs_eq2, xs_eq3};
-Psets = {ps_opt, ps_right, ps_ula, ps_eq2, ps_eq3};
-styles= {'b-o','r--s','k-.^','m:>','g-<'};  % plot styles
-Tr_all = zeros(numel(names), numel(SNR));
+Xsets = {xs_opt, xs_ula, xs_eq2, xs_eq3};     % fixed-geometry sets
+Psets = {ps_opt, ps_ula, ps_eq2, ps_eq3};
 
-for gi = 1:numel(names)
+styles= {'b-o','k-.^','m:>','g-<','c--d'};    % plotting styles
+
+Tr_all = zeros(numel(names), numel(SNR));
+p0_star= zeros(1, numel(SNR));                % store optimal p0*(SNR)
+
+% ---- Fixed geometries (A–D)
+for gi = 1:numel(Xsets)
     xs = Xsets{gi}; ps = Psets{gi};
     for i = 1:length(SNR)
         sigma2 = sigma2_list(i);
@@ -118,12 +116,29 @@ for gi = 1:numel(names)
     end
 end
 
+% ---- Family E: sweep p0 and take the minimum for each SNR
+for i = 1:length(SNR)
+    sigma2 = sigma2_list(i);
+
+    % Evaluate Tr(J^{-1}) over the p0 grid
+    for t = 1:length(p0_grid)
+        p0 = p0_grid(t);
+        ps = [ (1-p0)/2,  p0,  (1-p0)/2 ];     % [p_-, p0, p_+]
+        [~,~,Tr_sweep(t)] = CRB_from_support(xs_sweep, ps, sigma2);
+    end
+
+    % Find the best p0 at this SNR
+    [Tr_min, idx] = min(Tr_sweep);
+    Tr_all(numel(Xsets)+1, i) = Tr_min;
+    p0_star(i) = p0_grid(idx);
+end
+
 %% ================================================================
 %  Plot: Tr(J^{-1}) vs SNR (dB)
 % ================================================================
 figure; hold on;
 for gi = 1:numel(names)
-    semilogy(SNRdB, Tr_all(gi,:), styles{gi}, 'LineWidth', 1.5);
+    semilogy(SNRdB, Tr_all(gi,:), styles{gi}, 'LineWidth', 1.6, 'MarkerSize', 5);
 end
 grid on;
 xlabel('SNR (dB)','FontSize',12);
@@ -132,38 +147,45 @@ legend(names, 'Location','southwest');
 title(sprintf('CRB metric vs SNR  (r=%.1fm, u=%.2f, a=%.1f\\lambda)', r, u, a/lambda));
 set(gca,'FontSize',12);
 
+%% ================================================================
+%  OPTIONAL: visualize p0*(SNR) for the “Equal-ends + tuned center” family
+%  This shows how the best center weight evolves with SNR.
+% ================================================================
+figure;
+plot(SNRdB, p0_star, 'c--d', 'LineWidth', 1.6, 'MarkerSize', 5);
+grid on;
+xlabel('SNR (dB)','FontSize',12);
+ylabel('p_0^* (optimal center weight)','FontSize',12);
+title('Optimal center weight p_0^* vs SNR (Equal-ends family)');
+set(gca,'FontSize',12);
+
 end
+
 
 %% ================================================================
 %  Subfunction: metric_from_support()
-%  ---------------------------------------------------------------
-%  Implements Eqs. (14), (16)–(20):
-%   - Weights: w_m = (Es/(2πσ²)) * p_m * φ(x_m)
-%   - Compact FIM entries (J_uu, J_rr, J_ur)
-%   - det(J) and closed-form CRBs
-%  NOTE: no extra 2Es/σ² factor outside because it is absorbed into w_m.
+%  Implements Eqs. (14), (16)–(20).
+%  - Weights: w_m = (Es/(2πσ²)) * p_m * φ(x_m)
+%  - Compact FIM: J_uu, J_rr, J_ur (Eq. 16)
+%  - det(J): Eq. (18) with numerical guard
+%  - CRBs: Eqs. (19)–(20); no extra 2Es/σ² outside (already in w_m)
 % ================================================================
 function [CRBu, CRBr, TrJinv] = metric_from_support(xs, ps, phi_core, r_of_x, r, u, Es, sigma2)
-% Eq. (14): weighted kernel coefficients
-c    = Es/(2*pi*sigma2);
-wm   = ps(:) .* (c * phi_core(xs(:)));
+c    = Es/(2*pi*sigma2);                  % scale absorbed per Eq. (14)
+wm   = ps(:) .* (c * phi_core(xs(:)));    % w_m = (Es/(2πσ²)) p_m φ(x_m)
 
-% Weighted moments (used by Eqs. (16)–(20))
 S0   = sum(wm);
 xbar = sum(xs(:)    .* wm)/S0;
 x2   = sum((xs(:).^2).* wm)/S0;
 
-% Compact FIM (Eq. (16))
-Juu  = r^2 * S0 * x2;
+Juu  = r^2 * S0 * x2;                     % Eq. (16)
 Jrr  = S0 * (r^2 - 2*r*u*xbar + (u^2)*x2);
 Jur  = - r * S0 * (r*xbar - u*x2);
 
-% det(J) (Eq. (18)) + small numerical guard
-detJ = Juu*Jrr - Jur^2;
-detJ = max(detJ, 1e-18);
+detJ = Juu*Jrr - Jur^2;                   % Eq. (18)
+detJ = max(detJ, 1e-18);                  % numerical guard
 
-% Closed-form CRBs (Eqs. (19)–(20))
-CRBu  = Jrr / detJ;
-CRBr  = Juu / detJ;
-TrJinv = CRBu + CRBr;     % A-optimal metric
+CRBu  = Jrr / detJ;                       % Eq. (19)
+CRBr  = Juu / detJ;                       % Eq. (20)
+TrJinv = CRBu + CRBr;                     % A-optimal metric
 end
