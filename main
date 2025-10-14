@@ -14,17 +14,19 @@ SNRdB = linspace(-10, 30, 41);
 SNR   = 10.^(SNRdB/10);
 sigma2_list = Es ./ SNR;  % sigma^2 = Es / SNR
 
-%% ===== Kernel and helper =====
+%% ===== Kernel and helper (Eq. (22) kernel; Eq. (16)-(20) for CRB) =====
 r_of_x   = @(x) sqrt(r^2 - 2*r*u*x + x.^2);
-phi      = @(x) (k^2 + 1./(r_of_x(x).^2)) ./ (r_of_x(x).^4);
+phi_core = @(x) (k^2 + 1./(r_of_x(x).^2)) ./ (r_of_x(x).^4);  % Eq. (22)
 
-CRB_from_support = @(xs, ps, sigma2) metric_from_support(xs, ps, phi, r_of_x, r, u, Es, sigma2);
+CRB_from_support = @(xs, ps, sigma2) ...
+    metric_from_support(xs, ps, phi_core, r_of_x, r, u, Es, sigma2);
 
-%% ===== Case 1: symmetric optimal weights =====
+%% ===== Case 1: symmetric optimal weights (Theorem 1) =====
 x_minus = -a; x_zero = 0; x_plus = +a;
-phi_m = phi(x_minus);
-phi_0 = phi(x_zero);
-phi_p = phi(x_plus);
+phi_m = phi_core(x_minus);
+phi_0 = phi_core(x_zero);
+phi_p = phi_core(x_plus);
+
 A     = 2 - phi_0*(1/phi_m + 1/phi_p);
 tmax  = 1/(1/phi_m + 1/phi_p);
 C1    = 1 + (u^2)/(r^2);
@@ -42,7 +44,7 @@ else
     p0      = 1 - t_star*(1/phi_m + 1/phi_p);
 end
 xs1 = [x_minus, x_zero, x_plus];
-ps1 = [p_minus, p0, p_plus];
+ps1 = [p_minus, p0,     p_plus];
 
 %% ===== Case 2: right-edge cluster =====
 delta = 1e-3 * a;
@@ -72,21 +74,27 @@ set(gca,'FontSize',12);
 end
 
 
-%% ===== Subfunction =====
-function [CRBu, CRBr, TrJinv] = metric_from_support(xs, ps, phi, r_of_x, r, u, Es, sigma2)
-wm   = ps(:) .* phi(xs(:));
+%% ===== Subfunction (uses Eq. (16)-(20)) =====
+function [CRBu, CRBr, TrJinv] = metric_from_support(xs, ps, phi_core, r_of_x, r, u, Es, sigma2)
+% --- Weights: w_m = (Es/(2*pi*sigma^2)) * phi_core(x_m)  (Eq. (14))
+c    = Es/(2*pi*sigma2);
+wm   = ps(:) .* (c * phi_core(xs(:)));
+
 S0   = sum(wm);
 xbar = sum(xs(:).*wm)/S0;
 x2   = sum((xs(:).^2).*wm)/S0;
 
+% --- Compact FIM (Eq. (16))
 Juu  = r^2 * S0 * x2;
 Jrr  = S0 * (r^2 - 2*r*u*xbar + (u^2)*x2);
 Jur  = - r * S0 * (r*xbar - u*x2);
-detJ = Juu*Jrr - Jur^2;
 
-scale = 2*Es/sigma2;
-CRBu = scale * Jrr / detJ;
-CRBr = scale * Juu / detJ;
+% --- detJ (Eq. (18)) with small numerical guard
+detJ = Juu*Jrr - Jur^2;
+detJ = max(detJ, 1e-18);
+
+% --- Closed-form CRBs (Eq. (19)-(20)); no extra 2*Es/sigma^2 factor here
+CRBu  = Jrr / detJ;
+CRBr  = Juu / detJ;
 TrJinv = CRBu + CRBr;
 end
-
