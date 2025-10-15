@@ -1,53 +1,29 @@
-% ===== Preliminaries (implicit in text) =====
-% kappa = 2pi/lambda,  r_m = sqrt(r^2 - 2 r u x_m + x_m^2)
-
 \begin{equation}
 \begin{aligned}
-S_2 \;&=\; \sum_{m=1}^{N} \frac{1}{r_m^2}, 
-\\
-S_u \;&=\; \sum_{m=1}^{N} r x_m \!\left(\frac{1}{r_m^4} - j \frac{\kappa}{r_m^3}\right),
-\qquad
-S_r \;=\; \sum_{m=1}^{N} (r - u x_m)\! \left(-\frac{1}{r_m^4} + j \frac{\kappa}{r_m^3}\right),
-\\[2pt]
-Q_{uu} \;&=\; \frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2 + \frac{1}{r_m^2}\right)\frac{r^2 x_m^2}{r_m^4},
-\qquad
-Q_{rr} \;=\; \frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2 + \frac{1}{r_m^2}\right)\frac{(r - u x_m)^2}{r_m^4},
-\\
-Q_{ur} \;&=\; -\,\frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2 + \frac{1}{r_m^2}\right)\frac{r x_m (r - u x_m)}{r_m^4},
-\\[2pt]
-P_u \;&=\; \frac{1}{4\pi}\,\frac{|S_u|^2}{S_2},
-\qquad
-P_r \;=\; \frac{1}{4\pi}\,\frac{|S_r|^2}{S_2},
-\qquad
-R_{ur} \;=\; \Re\!\left\{\, Q_{ur} - \frac{1}{4\pi}\,\frac{S_u S_r^{*}}{S_2} \right\}.
+\mathrm{CRB}_u+\mathrm{CRB}_r
+&=\frac{\sigma^2}{2E_s}\;
+\frac{\,(Q_{uu}-P_u)+(Q_{rr}-P_r)\,}{\,(Q_{uu}-P_u)(Q_{rr}-P_r)-R_{ur}^{\,2}\,}.
 \end{aligned}
-\label{eq:defs_CRB_blocks}
+\label{eq:CRB_sum_compact}
 \end{equation}
 
 \begin{equation}
 \begin{aligned}
-J_{uu} \;&=\; \frac{2E_s}{\sigma^2}\,\big( Q_{uu} - P_u \big),
-\qquad
-J_{rr} \;=\; \frac{2E_s}{\sigma^2}\,\big( Q_{rr} - P_r \big),
-\\
-J_{ur} \;&=\; \frac{2E_s}{\sigma^2}\, R_{ur}.
+\mathrm{CRB}_u+\mathrm{CRB}_r
+&=\frac{\sigma^2}{2E_s}\;
+\frac{\displaystyle
+\frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2+\frac{1}{r_m^2}\right)
+\frac{\,r^2x_m^2+(r-u x_m)^2\,}{r_m^4}
+-\frac{1}{4\pi}\,\frac{|S_u|^2+|S_r|^2}{S_2}}
+{\displaystyle
+\Bigg[
+\left(\frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2+\frac{1}{r_m^2}\right)\frac{r^2x_m^2}{r_m^4}
+-\frac{1}{4\pi}\frac{|S_u|^2}{S_2}\right)
+\left(\frac{1}{4\pi}\sum_{m=1}^{N}\!\left(\kappa^2+\frac{1}{r_m^2}\right)\frac{(r-u x_m)^2}{r_m^4}
+-\frac{1}{4\pi}\frac{|S_r|^2}{S_2}\right)
+- R_{ur}^{\,2}
+\Bigg]
+}\!,
 \end{aligned}
-\label{eq:FIM_entries_compact}
-\end{equation}
-
-\begin{equation}
-\begin{aligned}
-\Delta \;&=\; J_{uu} J_{rr} - J_{ur}^2
-\;=\; \Big(\frac{2E_s}{\sigma^2}\Big)^{\!2}\!
-\Big[\,\big(Q_{uu} - P_u\big)\big(Q_{rr} - P_r\big) - R_{ur}^{\,2}\,\Big],
-\\[4pt]
-\mathrm{CRB}_u \;&=\; \frac{J_{rr}}{\Delta}
-\;=\; \frac{\sigma^2}{2E_s}\;
-\frac{\,Q_{rr} - P_r\,}{\big(Q_{uu} - P_u\big)\big(Q_{rr} - P_r\big) - R_{ur}^{\,2}},
-\\[4pt]
-\mathrm{CRB}_r \;&=\; \frac{J_{uu}}{\Delta}
-\;=\; \frac{\sigma^2}{2E_s}\;
-\frac{\,Q_{uu} - P_u\,}{\big(Q_{uu} - P_u\big)\big(Q_{rr} - P_r\big) - R_{ur}^{\,2}}.
-\end{aligned}
-\label{eq:CRB_final}
+\label{eq:CRB_sum_explicit}
 \end{equation}
