@@ -1,66 +1,33 @@
 \begin{theorem}[Finite-atom optimal array geometry]
-Consider 1D monostatic near-field sensing with a deterministic--unknown signal.
-Let the array geometry be a probability measure $\mu$ supported on $\mathcal X=[-A,A]$.
-For fixed $(u,r,\lambda)$ define
+Consider 1D monostatic near-field sensing with a deterministic--unknown signal. Let the array geometry be a probability measure $\mu$ supported on $\mathcal X=[-A,A]$, and fix $(u,r,\lambda)$. Define
 \[
-r(x)=\sqrt{r^2-2ru\,x+x^2},\qquad \kappa=\tfrac{2\pi}{\lambda}.
+r(x)=\sqrt{r^2-2ru\,x+x^2},\qquad \kappa=\tfrac{2\pi}{\lambda},
 \]
-Let the feature set be
+and the feature set
 \[
 \mathcal F=
 \Big\{\,r(x)^{-2},\,r(x)^{-3},\,r(x)^{-4},\,r(x)^{-6},\;
 x\,r(x)^{-3},\,x\,r(x)^{-4},\,x\,r(x)^{-6},\;
-x^2 r(x)^{-4},\,x^2 r(x)^{-6}\Big\},
+x^2 r(x)^{-4},\,x^2 r(x)^{-6}\Big\}.
 \]
-and $V=\mathrm{span}(\mathcal F)\subset L^1(\mathcal X)$ with $d=\dim(V)\le 9$.
-Then the sum-CRB under the deterministic--unknown model,
-\[
-\mathrm{CRB}_\Sigma(\mu):=\mathrm{CRB}_u(\mu)+\mathrm{CRB}_r(\mu),
-\]
-depends on $\mu$ only through the moment vector
-$m(\mu)=\big(\int \phi\,d\mu\big)_{\phi\in\mathcal F}\in\mathbb R^d$,
-and there exists an optimal measure $\mu^\star$ attaining
-$\inf_{\mu}\mathrm{CRB}_\Sigma(\mu)$ whose support has at most $d$ points
-(hence $\le 9$ points). If the functions in $\mathcal F$ are linearly
-dependent for the given $(u,r,\lambda)$, the bound tightens to $\le \dim(V)$.
+Let $V=\mathrm{span}(\mathcal F)\subset L^1(\mathcal X)$ with $d=\dim(V)\le 9$. Then the sum-CRB $\mathrm{CRB}_\Sigma(\mu)=\mathrm{CRB}_u(\mu)+\mathrm{CRB}_r(\mu)$ depends on $\mu$ only through the moment vector $m(\mu)=(\int \phi\,d\mu)_{\phi\in\mathcal F}\in\mathbb R^d$. There exists an optimal measure $\mu^\star$ attaining $\inf_{\mu}\mathrm{CRB}_\Sigma(\mu)$ whose support has at most $d$ points, hence at most $9$ points. If the functions in $\mathcal F$ are linearly dependent for the given $(u,r,\lambda)$, the bound tightens to $\dim(V)$.
 \end{theorem}
 
-\begin{proof}[Proof sketch]
-\textbf{(1) Moment parametrization.)}
-From the deterministic--unknown FIM,
-$J_{uu}=\frac{2E_s}{\sigma^2}(Q_{uu}-P_u)$,
-$J_{rr}=\frac{2E_s}{\sigma^2}(Q_{rr}-P_r)$,
-$J_{ur}=\frac{2E_s}{\sigma^2}R_{ur}$,
-where $Q_{uu},Q_{rr},Q_{ur}$ are linear integrals of functions in $\mathcal F$
-and $P_u,P_r,R_{ur}$ are quadratic forms built from the same integrals
-(e.g.\ $|S_u|^2/S_2$, $|S_r|^2/S_2$, $\Re\{S_u S_r^\*/S_2\}$ with
-$S_2=\int r(x)^{-2}d\mu$ etc.). Hence
+\begin{proof}
+From the deterministic--unknown FIM, one has
+\[
+J_{uu}=\tfrac{2E_s}{\sigma^2}(Q_{uu}-P_u),\qquad
+J_{rr}=\tfrac{2E_s}{\sigma^2}(Q_{rr}-P_r),\qquad
+J_{ur}=\tfrac{2E_s}{\sigma^2}R_{ur},
+\]
+where $Q_{uu},Q_{rr},Q_{ur}$ are linear integrals of functions in $\mathcal F$, and $P_u,P_r,R_{ur}$ are quadratic forms in the same integrals (for instance $|S_u|^2/S_2$, $|S_r|^2/S_2$, $\Re\{S_uS_r^\*/S_2\}$ with $S_2=\int r(x)^{-2}d\mu$). Consequently
 \[
 \mathrm{CRB}_\Sigma(\mu)
-= \frac{\sigma^2}{2E_s}\,
-\frac{(Q_{uu}-P_u)+(Q_{rr}-P_r)}
-{(Q_{uu}-P_u)(Q_{rr}-P_r)-R_{ur}^2}
-= H\big(m(\mu)\big),
+=\frac{J_{rr}}{J_{uu}J_{rr}-J_{ur}^2}
++\frac{J_{uu}}{J_{uu}J_{rr}-J_{ur}^2}
+=\frac{\sigma^2}{2E_s}\,\frac{(Q_{uu}-P_u)+(Q_{rr}-P_r)}{(Q_{uu}-P_u)(Q_{rr}-P_r)-R_{ur}^2},
 \]
-a rational function of $m(\mu)\in\mathbb R^d$.
+which is a rational function $H(m(\mu))$ of the moment vector $m(\mu)\in\mathbb R^d$. The feasible moment set $\mathcal M=\{m(\mu):\mu\in\mathcal P(\mathcal X)\}\subset\mathbb R^d$ is compact and convex because it is the image of the tight, convex set of probability measures on a compact domain under a continuous linear map $\mu\mapsto(\int\phi\,d\mu)_{\phi\in\mathcal F}$.
 
-\textbf{(2) Compact convex moment set.)}
-The feasible moment set
-$\mathcal M=\{m(\mu):\mu\in\mathcal P(\mathcal X)\}\subset\mathbb R^d$
-is compact and convex (continuous linear maps of probability measures on a compact set).
-
-\textbf{(3) Finite-atom representation.)}
-By the Richter--Rogosinski (a Carath\'eodory-type) theorem for finite-dimensional
-function spaces: for any $\mu$ there exists a $k$-atomic measure
-$\nu=\sum_{i=1}^{k}p_i\delta_{x_i}$ with $k\le d$ such that
-$\int\phi\,d\nu=\int\phi\,d\mu$ for all $\phi\in\mathcal F$; hence
-$m(\nu)=m(\mu)$ and $H(m(\nu))=H(m(\mu))$.
-
-\textbf{(4) Optimal atomic measure.)}
-Since $H$ is continuous on compact $\mathcal M$ and its denominator is positive
-(positive-definite FIM), an optimizer $m^\star\in\mathcal M$ exists.
-By (3) there is a $k$-atomic $\nu^\star$ with $k\le d$ such that
-$m(\nu^\star)=m^\star$ and
-$\mathrm{CRB}_\Sigma(\nu^\star)=\mathrm{CRB}_\Sigma(\mu^\star)$.
-Therefore an optimal array can be realized with at most $d\le 9$ atoms.
+By the Richter--Rogosinski theorem for finite-dimensional function spaces, for any probability measure $\mu$ there exists a $k$-atomic measure $\nu=\sum_{i=1}^{k}p_i\delta_{x_i}$ with $k\le d$ such that $\int\phi\,d\nu=\int\phi\,d\mu$ for all $\phi\in\mathcal F$. Hence $m(\nu)=m(\mu)$ and therefore $H(m(\nu))=H(m(\mu))$. Since $H$ is continuous and its denominator is strictly positive on $\mathcal M$ (positive-definite FIM), there exists $m^\star\in\mathcal M$ minimizing $H$. Applying the finite-atom representation to any measure attaining $m^\star$ yields an optimal atomic measure with at most $d$ support points. As $d\le 9$, an optimal geometry can be realized with at most nine atoms; if $\mathcal F$ is linearly dependent for the given $(u,r,\lambda)$, the bound reduces to $\dim(V)$.
 \end{proof}
