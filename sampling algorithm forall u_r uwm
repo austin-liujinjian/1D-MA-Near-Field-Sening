@@ -1,72 +1,80 @@
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function apv_joint = optimize_apv_joint_fig5_given_ur_cpu(u0, r0)
 % Discrete-sampling APV optimizer on aperture [-a, a]
 % GIVEN (u0,r0): maximize 1 / ( CRBu(x) + CRBr(x,u0,r0) )
-% CPU-only; parfor over candidates. Geometry need not be symmetric.
+% CPU-only; parfor over candidates. Geometry need not be symmetric
+% when u0 ~= 0 (due to the 8*u0*r0^3*cov(x,x^2) term).
 
-clc; clearvars -except u0 r0; close all;
+% ---- FIX: do NOT override inputs; avoid clearvars inside functions ----
+clc; close all;
 
 %% ------------------------- Problem Parameters ---------------------------
-
-u0=1/3;
-r0=5;
 lambda = 1.0;
 N      = 16;
-d      = 0.2*lambda;
-a      = 5*lambda;                 % half-aperture; aperture is [-a, a]
+d      = 0.5*lambda;            % FIX: typical half-wavelength; change if needed
+a      = 5*lambda;              % half-aperture; aperture is [-a, a]
 M      = 2000;
-S      = linspace(-a, +a, M);      % candidates on [-a, a]
-% Near-field distance bounds (typical textbook formulas; replace with your paper's exact range if needed)
-R_FS  = 0.62*sqrt((2*a)^3/lambda);   % Fresnel (near-field) lower bound
-R_RL  = 2*4*a^2/lambda;            % Rayleigh distance (far-field) boundary
-r_min = R_FS;
-r_max = R_RL/2;
+S      = linspace(-a, +a, M);   % candidates on [-a, a]
 
-% (Optional) sanity checks for (u0,r0)
+% Basic sanity checks for (u0,r0)
 if abs(u0) >= 1, error('u0 must satisfy |u0| < 1 (u = cos theta).'); end
 if r0 <= 0,     error('r0 must be positive.'); end
 
-% Start a CPU pool
+% ---- FIX: geometry feasibility check ----
+if (N-1)*d > 2*a + 1e-12
+    error('(N-1)*d must be <= 2a to place %d elements with spacing %g in [-a,a].', N, d);
+end
+
+% Start a CPU pool (prefer thread-based to reduce overhead)
 pool = gcp('nocreate');
 if isempty(pool)
     try, parpool('threads'); catch, parpool; end
 end
 
 %% --------------------- Initialization (two-group ends) ------------------
-apv_init = two_group_init_sym(N, d, a);
-apv_star = nan(1, N);
-apv_fixR = apv_init;
+apv_init = two_group_init_sym(N, d, a);   % ends-loaded, spacing d
+apv_star = nan(1, N);                     % sequentially updated positions
+apv_fixR = apv_init;                      % right-side placeholders (anchors)
 
 %% ------------------- Sequential update over elements --------------------
-for n = 1:N
-    % Feasible set S_n on [-a,a]
-    S_mask = true(size(S));
-    for i = 1:n-1
-        S_mask = S_mask & (abs(S - apv_star(i)) >= d - 1e-9);
-    end
-    for j = n+1:N
-        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - 1e-9);
-    end
-    S_n = S(S_mask);
-    if isempty(S_n)
-        error('Feasible set S_n empty at n=%d. Increase M or relax constraints.', n);
+% (Optional) outer passes to reduce greediness; set to 1 if not needed
+num_outer_pass = 1;   % you can try 2~3 for a tad better optimum
+
+for pass = 1:num_outer_pass
+    for n = 1:N
+        % Feasible set S_n on [-a,a] w.r.t. left-updated and right-anchors
+        S_mask = true(size(S));
+        for i = 1:n-1
+            S_mask = S_mask & (abs(S - apv_star(i)) >= d - 1e-9);
+        end
+        for j = n+1:N
+            S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - 1e-9);
+        end
+        S_n = S(S_mask);
+        if isempty(S_n)
+            error('Feasible set S_n empty at n=%d (pass %d). Increase M or relax constraints.', n, pass);
+        end
+
+        % Parallel scoring (CPU-only)
+        scores = -inf(1, numel(S_n));
+        left_fixed  = apv_star(1:n-1);   %#ok<NASGU>   % read-only for parfor
+        right_fixed = apv_fixR(n+1:N);   %#ok<NASGU>
+        u_local = u0;                    %#ok<NASGU>
+        r_local = r0;                    %#ok<NASGU>
+
+        parfor k = 1:numel(S_n)
+            s = S_n(k);
+            x_hat = [left_fixed, s, right_fixed];      % candidate APV
+            scores(k) = objective_given_ur_cpu_core(x_hat, u_local, r_local);
+        end
+
+        % Pick the best candidate for position n and commit
+        [~, idx] = max(scores);
+        apv_star(n) = S_n(idx);
     end
 
-    % Parallel scoring
-    scores = -inf(1, numel(S_n));
-    left_fixed  = apv_star(1:n-1);   %#ok<NASGU>
-    right_fixed = apv_fixR(n+1:N);   %#ok<NASGU>
-    u_local = u0;                    %#ok<NASGU>
-    r_local = r0;                    %#ok<NASGU>
-
-    parfor k = 1:numel(S_n)
-        s = S_n(k);
-        x_hat = [left_fixed, s, right_fixed];
-        scores(k) = objective_given_ur_cpu_core(x_hat, u_local, r_local);
-    end
-
-    [~, idx] = max(scores);
-    apv_star(n) = S_n(idx);
+    % (Optional) re-anchor the "right side anchors" around current solution
+    % to reduce overly conservative constraints in next outer pass:
+    % apv_fixR = apv_star;   % <- uncomment if num_outer_pass > 1
 end
 
 apv_joint = sort(apv_star);
@@ -93,11 +101,9 @@ end
 
 %% ================== Objective: GIVEN (u0,r0) ============================
 function val = objective_given_ur_cpu_core(x, u0, r0)
-
-
-[varx, varx2, covxx2, Delta] = moment_terms_origin0(x);  % x is on [-a,a]
-
-Delta = max(Delta, 1e-12);
+% CRBu + CRBr at given (u0,r0), with all moments about origin 0.
+[varx, varx2, covxx2, Delta] = moment_terms_origin0(x);
+Delta = max(Delta, 1e-12);     % guard degeneracy
 
 CRBu = varx2 / Delta;
 
@@ -110,17 +116,16 @@ end
 
 %% ======================= Initial two-group on [-a,a] ====================
 function x0 = two_group_init_sym(N, d, a)
-% Place floor(N/2) at the left end starting at -a with spacing d,
-% and the rest at the right end starting at +a with spacing d.
+% Ends-loaded template: -a, -a+d, ..., and a, a-d, ...
 left_cnt  = floor(N/2);
 right_cnt = N - left_cnt;
 
-left_grp  = (-a) + (0:left_cnt-1)*d;              % -a, -a+d, ...
-right_grp = (+a) - (0:right_cnt-1)*d;             % +a, +a-d, ...
+left_grp  = (-a) + (0:left_cnt-1)*d;
+right_grp = (+a) - (0:right_cnt-1)*d;
 
 x0 = sort([left_grp, right_grp]);
 
-% Feasibility checks on [-a,a]
+% Feasibility checks
 if any(abs(x0) > a + 1e-9)
     error('Initial APV exceeds aperture [-a,a]. Increase a or reduce N/d.');
 end
@@ -129,10 +134,8 @@ if any(diff(x0) < d - 1e-9)
 end
 end
 
-%% =================== Moments on origin 0 (aperture-centered) ============
+%% =================== Moments about origin 0 =============================
 function [varx, varx2, covxx2, Delta] = moment_terms_origin0(x)
-% Use the array phase center (0) as the coordinate origin, per the paper.
-% Moments are taken w.r.t. uniform weights (equal per-antenna).
 x   = x(:).';
 x2  = x.^2;
 mx  = mean(x);
@@ -152,9 +155,9 @@ groups = ones(size(x_sorted));
 g = 1;
 for i = 1:numel(dx)
     if abs(dx(i) - d) <= tol
-        groups(i+1) = g;         % same group if near half-λ spacing
+        groups(i+1) = g;
     else
-        g = g + 1;               % new group when a larger gap appears
+        g = g + 1;
         groups(i+1) = g;
     end
 end
