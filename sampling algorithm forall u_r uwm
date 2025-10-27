@@ -1,121 +1,3 @@
-function apv_joint = optimize_apv_joint_fig5_minmax_cpu()
-% Discrete-sampling APV optimizer on aperture [-a, a]
-% MIN–MAX over (u,r): maximize 1 / ( CRBu(x) + max_{u,r} CRBr(x,u,r) )
-% CPU-only: parfor over candidate points; coordinates are in [-a, a].
-%
-% Expected outcome under USW/constant-amplitude model:
-%   symmetric geometry about 0 for the worst-case (forall u,r) design.
-
-clc; clear; close all;
-
-%% ------------------------- Problem Parameters ---------------------------
-lambda = 1.0;                    % wavelength (normalized units)
-N      = 16;                     % number of antennas
-d      = 0.5*lambda;             % minimum inter-antenna spacing
-a      = 5*lambda;               % half-aperture; aperture is [-a, a]
-M      = 2000;                   % #discrete candidate points (M >> N)
-S      = linspace(-a, +a, M);    % candidate set on [-a, a]
-
-% Near-field distance bounds using full aperture D = 2a
-D     = 2*a;
-R_FS  = 0.62*sqrt(D^3 / lambda);     % Fresnel lower bound (typical)
-R_RL  = 2*D^2 / lambda;              % Rayleigh distance
-r_min = R_FS;
-r_max = R_RL/2;
-
-% Symmetric u-grid to avoid directional bias; exclude |u|=1 singularity
-Nu_half = 100;                           % positive-side count (excluding 0)
-u_pos   = linspace(0, 0.99, Nu_half+1);  % includes 0
-u_grid  = unique([-u_pos, u_pos]);       % symmetric set about 0
-Nr      = 151;
-r_grid  = linspace(r_min, r_max, Nr);
-
-% Start a CPU pool (prefer thread-based to reduce overhead)
-pool = gcp('nocreate');
-if isempty(pool)
-    try, parpool('threads'); catch, parpool; end
-end
-
-%% --------------------- Initialization (two-group ends) ------------------
-% Ends-loaded, half-wavelength spacing on [-a, a]
-apv_init = two_group_init_sym(N, d, a);
-apv_star = nan(1, N);
-apv_fixR = apv_init;
-
-%% ------------------- Sequential update over elements --------------------
-for n = 1:N
-    % ----- Feasible set S_n: keep >= d from placed-left and unplaced-right
-    S_mask = true(size(S));
-    for i = 1:n-1
-        S_mask = S_mask & (abs(S - apv_star(i)) >= d - 1e-9);
-    end
-    for j = n+1:N
-        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - 1e-9);
-    end
-    S_n = S(S_mask);
-    if isempty(S_n)
-        error('Feasible set S_n empty at n=%d. Increase M or relax constraints.', n);
-    end
-
-    % ----- Parallel scoring over candidates s in S_n (CPU-only) ----------
-    scores = -inf(1, numel(S_n));
-    left_fixed  = apv_star(1:n-1);   %#ok<NASGU>
-    right_fixed = apv_fixR(n+1:N);   %#ok<NASGU>
-    ugrid_local = u_grid;            %#ok<NASGU>
-    rgrid_local = r_grid;            %#ok<NASGU>
-
-    parfor k = 1:numel(S_n)
-        s = S_n(k);
-        x_hat = [left_fixed, s, right_fixed];     % candidate APV on [-a, a]
-        scores(k) = objective_minmax_cpu(x_hat, ugrid_local, rgrid_local);
-    end
-
-    % ----- Pick best and commit -----------------------------------------
-    [~, idx]  = max(scores);
-    apv_star(n) = S_n(idx);
-end
-
-apv_joint = sort(apv_star);  % for display
-
-%% ------------------------------ Plot ------------------------------------
-figure('Color','w'); hold on; box on;
-y0 = zeros(size(apv_joint));
-groups = split_into_groups(apv_joint, d, 1e-3*d);   % ~half-λ intra-group
-colors = lines(max(groups));
-for g = 1:max(groups)
-    idx = find(groups == g);
-    scatter(apv_joint(idx), y0(idx), 70, colors(g,:), 'filled', 'MarkerEdgeColor','k');
-end
-plot([-a a],[0 0],'k-','LineWidth',1.5);
-xline(-a,'k:','LineWidth',1); xline(a,'k:','LineWidth',1); xline(0,'k--');
-xlabel('Position x (on [-a,a])'); yticks([]); ylim([-0.3 0.3]); xlim([-a a]);
-title('Optimized APV (min–max over all u,r; aperture [-a,a])');
-legend(arrayfun(@(g) sprintf('Group %d',g), 1:max(groups), 'UniformOutput',false), ...
-       'Location','northoutside','Orientation','horizontal');
-
-fprintf('Optimized APV (x in wavelengths):\n'); disp(apv_joint.');
-
-end
-
-%% ================== Objective: MIN–MAX over (u,r) =======================
-function val = objective_minmax_cpu(x, u_grid, r_grid)
-% 1 / ( CRBu(x) + max_{u in U, r in R} CRBr(x,u,r) ), CPU-only
-[varx, varx2, covxx2, Delta] = moment_terms_origin0(x);
-Delta = max(Delta, 1e-12);
-
-% CRBu (common scalar factors cancel in geometry optimization)
-CRBu = varx2 / Delta;
-
-% Worst-case CRBr over symmetric (u,r) grid
-[U, R] = ndgrid(u_grid, r_grid);
-num = 4*(R.^4)*varx + 8*U.*(R.^3)*covxx2 + 4*(U.^2).*(R.^2)*varx2;
-den = (1 - U.^2).^2;
-CRBr_grid  = num ./ (den * Delta);
-CRBr_worst = max(CRBr_grid, [], 'all');
-
-val = 1 / (CRBu + CRBr_worst);
-end
-
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 function apv_joint = optimize_apv_joint_fig5_given_ur_cpu(u0, r0)
 % Discrete-sampling APV optimizer on aperture [-a, a]
@@ -125,12 +7,20 @@ function apv_joint = optimize_apv_joint_fig5_given_ur_cpu(u0, r0)
 clc; clearvars -except u0 r0; close all;
 
 %% ------------------------- Problem Parameters ---------------------------
+
+u0=1/3;
+r0=5;
 lambda = 1.0;
 N      = 16;
-d      = 0.5*lambda;
+d      = 0.2*lambda;
 a      = 5*lambda;                 % half-aperture; aperture is [-a, a]
 M      = 2000;
 S      = linspace(-a, +a, M);      % candidates on [-a, a]
+% Near-field distance bounds (typical textbook formulas; replace with your paper's exact range if needed)
+R_FS  = 0.62*sqrt((2*a)^3/lambda);   % Fresnel (near-field) lower bound
+R_RL  = 2*4*a^2/lambda;            % Rayleigh distance (far-field) boundary
+r_min = R_FS;
+r_max = R_RL/2;
 
 % (Optional) sanity checks for (u0,r0)
 if abs(u0) >= 1, error('u0 must satisfy |u0| < 1 (u = cos theta).'); end
@@ -203,7 +93,10 @@ end
 
 %% ================== Objective: GIVEN (u0,r0) ============================
 function val = objective_given_ur_cpu_core(x, u0, r0)
+
+
 [varx, varx2, covxx2, Delta] = moment_terms_origin0(x);  % x is on [-a,a]
+
 Delta = max(Delta, 1e-12);
 
 CRBu = varx2 / Delta;
