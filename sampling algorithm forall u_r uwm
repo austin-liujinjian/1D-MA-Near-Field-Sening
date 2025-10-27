@@ -1,1 +1,150 @@
+function apv_joint = optimize_apv_joint_fig5_given_ur_cpu(u0, r0)
+% Parallel discrete-sampling optimizer for APV with GIVEN (u,r)
+% - Maximizes 1 / ( CRBu(x) + CRBr(x,u0,r0) ), no worst-case over (u,r)
+% - CPU-only; parfor over candidate points
+%
+% Usage:
+%   parpool('threads');                    % recommended (or parpool)
+%   apv = optimize_apv_joint_fig5_given_ur_cpu(0.3, 12.0);
+
+clc; clearvars -except u0 r0; close all;
+
+%% ------------------------- Problem Parameters ---------------------------
+lambda = 1.0;                 % wavelength (normalized units)
+N      = 16;                  % number of antennas
+d      = 0.5*lambda;          % minimum inter-antenna spacing
+A      = 10*lambda;           % movement region length
+M      = 2000;                % number of discrete sampling points (M >> N)
+S      = linspace(0, A, M);   % discrete candidate locations
+
+% (Optional) sanity checks for given (u0,r0)
+if abs(u0) >= 1
+    error('u0 must satisfy |u0| < 1 (recall u = cos(theta)).');
+end
+if r0 <= 0
+    error('r0 must be positive.');
+end
+
+% Start a CPU pool (prefer thread-based to reduce overhead)
+pool = gcp('nocreate');
+if isempty(pool)
+    try, parpool('threads'); catch, parpool; end
+end
+
+%% --------------------- Initialization (two-group) -----------------------
+apv_init = two_group_init(N, d, A);   % ends-loaded, half-wavelength spacing
+apv_star = nan(1, N);                 % will hold sequentially updated positions
+apv_fixR = apv_init;                  % right-side placeholders (not-yet-updated)
+
+%% ------------------- Sequential update over elements --------------------
+for n = 1:N
+    % ----- Build feasible candidate set S_n (respect min spacing d) -----
+    S_mask = true(size(S));
+    for i = 1:n-1
+        S_mask = S_mask & (abs(S - apv_star(i)) >= d - 1e-9);
+    end
+    for j = n+1:N
+        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - 1e-9);
+    end
+    S_n = S(S_mask);
+    if isempty(S_n)
+        error('Feasible set S_n is empty at n=%d. Increase M or relax constraints.', n);
+    end
+
+    % ----- Parallel scoring over candidates s in S_n (CPU-only) ----------
+    scores = -inf(1, numel(S_n));
+    left_fixed  = apv_star(1:n-1);   %#ok<NASGU>  % read-only snapshots for parfor
+    right_fixed = apv_fixR(n+1:N);   %#ok<NASGU>
+    u_local = u0;                    %#ok<NASGU>
+    r_local = r0;                    %#ok<NASGU>
+
+    parfor k = 1:numel(S_n)
+        s = S_n(k);
+        x_hat = [left_fixed, s, right_fixed];      % candidate APV
+        scores(k) = objective_given_ur_cpu(x_hat, u_local, r_local);
+    end
+
+    % ----- Pick the best candidate and commit ----------------------------
+    [~, idx] = max(scores);
+    apv_star(n) = S_n(idx);
+end
+
+apv_joint = sort(apv_star);
+
+%% ------------------------------ Plot (Fig.5-like) -----------------------
+figure('Color','w'); hold on; box on;
+y0 = zeros(size(apv_joint));
+groups = split_into_groups(apv_joint, d, 1e-3*d);
+colors = lines(max(groups));
+for g = 1:max(groups)
+    idx = find(groups == g);
+    scatter(apv_joint(idx), y0(idx), 70, colors(g,:), 'filled', 'MarkerEdgeColor','k');
+end
+plot([0 A],[0 0],'k-','LineWidth',1.5);
+xline(0,'k:','LineWidth',1); xline(A,'k:','LineWidth',1);
+xlabel('Position x'); yticks([]); ylim([-0.3 0.3]); xlim([0 A]);
+title(sprintf('Optimized APV (given u=%.3f, r=%.3f)', u0, r0));
+legend(arrayfun(@(g) sprintf('Group %d',g), 1:max(groups), 'UniformOutput',false), ...
+       'Location','northoutside','Orientation','horizontal');
+
+fprintf('Optimized APV (x in wavelengths):\n');
+disp(apv_joint.');
+
+end
+
+%% ================== Objective for GIVEN (u0,r0) =========================
+function val = objective_given_ur_cpu(x, u0, r0)
+% Compute 1 / ( CRBu(x) + CRBr(x,u0,r0) ) on CPU (no worst-case search)
+[varx, varx2, covxx2, Delta] = moment_terms(x);
+Delta = max(Delta, 1e-12);         % avoid degenerate geometry
+
+% CRBu (kappa cancels in geometry optimization)
+CRBu = varx2 / Delta;
+
+% CRBr at the given (u0,r0); same closed-form you used before, just plug-in
+num = 4*(r0^4)*varx + 8*u0*(r0^3)*covxx2 + 4*(u0^2)*(r0^2)*varx2;
+den = (1 - u0^2)^2;
+CRBr = num / (den * Delta);
+
+% Final objective (maximize its value)
+val = 1 / (CRBu + CRBr);
+end
+
+%% ======================= Initial two-group APV ==========================
+function x0 = two_group_init(N, d, A)
+left_cnt  = floor(N/2);
+right_cnt = N - left_cnt;
+left_grp  = (0:left_cnt-1)*d;
+right_grp = A - (right_cnt-1:-1:0)*d;
+x0 = sort([left_grp, right_grp]);
+if any(diff(x0) < d - 1e-9)
+    error('Initial APV violates min spacing d.');
+end
+end
+
+%% =================== Moments: var/cov building blocks ===================
+function [varx, varx2, covxx2, Delta] = moment_terms(x)
+x  = x(:).';
+x2 = x.^2;
+mx  = mean(x);   mx2 = mean(x2);
+varx   = mean(x.^2) - mx^2;
+varx2  = mean(x2.^2) - mx2^2;
+covxx2 = mean(x.*x2) - mx*mx2;
+Delta = varx*varx2 - covxx2^2;
+end
+
+%% =================== Grouping for Fig.5-style coloring ==================
+function groups = split_into_groups(x_sorted, d, tol)
+dx = diff(x_sorted);
+groups = ones(size(x_sorted));
+g = 1;
+for i = 1:numel(dx)
+    if abs(dx(i) - d) <= tol
+        groups(i+1) = g;
+    else
+        g = g + 1;
+        groups(i+1) = g;
+    end
+end
+end
 
