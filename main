@@ -1,33 +1,178 @@
-\begin{theorem}[Finite-atom optimal array geometry]
-Consider 1D monostatic near-field sensing with a deterministic--unknown signal. Let the array geometry be a probability measure $\mu$ supported on $\mathcal X=[-A,A]$, and fix $(u,r,\lambda)$. Define
-\[
-r(x)=\sqrt{r^2-2ru\,x+x^2},\qquad \kappa=\tfrac{2\pi}{\lambda},
-\]
-and the feature set
-\[
-\mathcal F=
-\Big\{\,r(x)^{-2},\,r(x)^{-3},\,r(x)^{-4},\,r(x)^{-6},\;
-x\,r(x)^{-3},\,x\,r(x)^{-4},\,x\,r(x)^{-6},\;
-x^2 r(x)^{-4},\,x^2 r(x)^{-6}\Big\}.
-\]
-Let $V=\mathrm{span}(\mathcal F)\subset L^1(\mathcal X)$ with $d=\dim(V)\le 9$. Then the sum-CRB $\mathrm{CRB}_\Sigma(\mu)=\mathrm{CRB}_u(\mu)+\mathrm{CRB}_r(\mu)$ depends on $\mu$ only through the moment vector $m(\mu)=(\int \phi\,d\mu)_{\phi\in\mathcal F}\in\mathbb R^d$. There exists an optimal measure $\mu^\star$ attaining $\inf_{\mu}\mathrm{CRB}_\Sigma(\mu)$ whose support has at most $d$ points, hence at most $9$ points. If the functions in $\mathcal F$ are linearly dependent for the given $(u,r,\lambda)$, the bound tightens to $\dim(V)$.
-\end{theorem}
+% Joint AoA & Range Estimation: Discrete Sampling Optimization for APV
+% Reproduces Fig.5-style optimized antenna positions (three-group geometry)
+% References: Section V & Algorithm 1 (discrete sampling) in the paper.
+% Author: (your name), Date: (today)
 
-\begin{proof}
-From the deterministic--unknown FIM, one has
-\[
-J_{uu}=\tfrac{2E_s}{\sigma^2}(Q_{uu}-P_u),\qquad
-J_{rr}=\tfrac{2E_s}{\sigma^2}(Q_{rr}-P_r),\qquad
-J_{ur}=\tfrac{2E_s}{\sigma^2}R_{ur},
-\]
-where $Q_{uu},Q_{rr},Q_{ur}$ are linear integrals of functions in $\mathcal F$, and $P_u,P_r,R_{ur}$ are quadratic forms in the same integrals (for instance $|S_u|^2/S_2$, $|S_r|^2/S_2$, $\Re\{S_uS_r^\*/S_2\}$ with $S_2=\int r(x)^{-2}d\mu$). Consequently
-\[
-\mathrm{CRB}_\Sigma(\mu)
-=\frac{J_{rr}}{J_{uu}J_{rr}-J_{ur}^2}
-+\frac{J_{uu}}{J_{uu}J_{rr}-J_{ur}^2}
-=\frac{\sigma^2}{2E_s}\,\frac{(Q_{uu}-P_u)+(Q_{rr}-P_r)}{(Q_{uu}-P_u)(Q_{rr}-P_r)-R_{ur}^2},
-\]
-which is a rational function $H(m(\mu))$ of the moment vector $m(\mu)\in\mathbb R^d$. The feasible moment set $\mathcal M=\{m(\mu):\mu\in\mathcal P(\mathcal X)\}\subset\mathbb R^d$ is compact and convex because it is the image of the tight, convex set of probability measures on a compact domain under a continuous linear map $\mu\mapsto(\int\phi\,d\mu)_{\phi\in\mathcal F}$.
+function apv_joint = optimize_apv_joint_fig5()
+clc; clear; close all;
 
-By the Richter--Rogosinski theorem for finite-dimensional function spaces, for any probability measure $\mu$ there exists a $k$-atomic measure $\nu=\sum_{i=1}^{k}p_i\delta_{x_i}$ with $k\le d$ such that $\int\phi\,d\nu=\int\phi\,d\mu$ for all $\phi\in\mathcal F$. Hence $m(\nu)=m(\mu)$ and therefore $H(m(\nu))=H(m(\mu))$. Since $H$ is continuous and its denominator is strictly positive on $\mathcal M$ (positive-definite FIM), there exists $m^\star\in\mathcal M$ minimizing $H$. Applying the finite-atom representation to any measure attaining $m^\star$ yields an optimal atomic measure with at most $d$ support points. As $d\le 9$, an optimal geometry can be realized with at most nine atoms; if $\mathcal F$ is linearly dependent for the given $(u,r,\lambda)$, the bound reduces to $\dim(V)$.
-\end{proof}
+%% ------------------------- Problem Parameters ---------------------------
+lambda = 1.0;                 % wavelength (normalized units)
+N      = 16;                  % number of antennas
+d      = 0.5*lambda;          % minimum inter-antenna spacing
+A      = 10*lambda;           % movement region length
+M      = 2000;                % number of discrete sampling points (M >> N)
+S      = linspace(0, A, M);   % discrete candidate locations
+
+% Near-field distance bounds (standard forms used in antenna literature)
+R_FS = 0.62*sqrt(A^3/lambda);   % Fresnel (near-field) lower bound
+R_RL = 2*A^2/lambda;            % Rayleigh distance (Fraunhofer) upper bound
+r_min = R_FS;
+r_max = R_RL/2;
+
+% Worst-case search grids for u and r (avoid u=1 singularity):
+Nu = 101;                         % # of AoA grid points
+Nr = 151;                         % # of range grid points
+u_grid = linspace(0, 0.99, Nu);   % u in [0,1)
+r_grid = linspace(r_min, r_max, Nr);
+
+% Numerical tolerance for spacing / grouping
+tol = 1e-6;
+
+%% --------------------- Initialization (Theorem 1) -----------------------
+% Two-group "ends" geometry: half the elements at the left end, half at right end
+apv_init = two_group_init(N, d, A);
+
+% Pre-allocate the working vectors for the sequential update
+apv_star = nan(1, N);         % will store updated positions x*_1..x*_N
+apv_fixR = apv_init;          % right-side (yet-to-update) placeholders
+
+%% ------------------- Sequential Discrete Sampling Update ----------------
+% One forward pass n = 1..N as in Algorithm 1 of the paper
+for n = 1:N
+    % 1) Build feasible candidate set S_n satisfying min spacing to already-picked
+    S_mask = true(size(S));
+    % Must keep >= d away from previously updated x*_1..x*_(n-1)
+    for i = 1:n-1
+        S_mask = S_mask & (abs(S - apv_star(i)) >= d - tol);
+    end
+    % Must keep >= d away from the remaining (not-yet-updated) initial positions
+    for j = n+1:N
+        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - tol);
+    end
+    S_n = S(S_mask);
+    if isempty(S_n)
+        error('Feasible set S_n is empty at n=%d. Increase M or relax tol.', n);
+    end
+
+    % 2) Evaluate objective for each candidate s in S_n:
+    %    F_eta(x_hat) = 1 / ( CRBu(x_hat) + max_{u,r} CRBr(x_hat, u, r) )
+    best_val = -inf;
+    best_s   = NaN;
+    for k = 1:numel(S_n)
+        s = S_n(k);
+        x_hat = [apv_star(1:n-1), s, apv_fixR(n+1:N)];  % candidate APV
+        score = objective_inverse_trace(x_hat, u_grid, r_grid);
+        if score > best_val
+            best_val = score;
+            best_s   = s;
+        end
+    end
+
+    % 3) Accept the best s for antenna n
+    apv_star(n) = best_s;
+    % 4) Proceed to next n (the loop updates feasibility automatically)
+end
+
+% Sort final APV in ascending order (purely for display aesthetics)
+apv_joint = sort(apv_star);
+
+% Print optimized APV
+fprintf('Optimized APV (x in wavelengths):\n');
+disp(apv_joint.');
+
+%% ------------------------------ Plot (Fig.5-like) -----------------------
+figure('Color','w'); hold on; box on;
+y0 = zeros(size(apv_joint));
+
+% Identify contiguous half-wavelength-spaced groups and color them
+groups = split_into_groups(apv_joint, d, 1e-3*d);
+colors = lines(max(groups));
+for g = 1:max(groups)
+    idx = find(groups == g);
+    scatter(apv_joint(idx), y0(idx), 70, colors(g,:), 'filled', 'MarkerEdgeColor','k');
+end
+
+% Aesthetics to mimic Fig.5 style
+plot([0 A],[0 0],'k-','LineWidth',1.5);
+xline(0,'k:','LineWidth',1); xline(A,'k:','LineWidth',1);
+xlabel('Position x'); ylabel('');
+yticks([]); ylim([-0.3 0.3]);
+xlim([0 A]);
+title('Optimized APV for Joint AoA & Range Estimation');
+legend(arrayfun(@(g) sprintf('Group %d',g), 1:max(groups), 'UniformOutput',false), ...
+       'Location','northoutside','Orientation','horizontal');
+
+end
+
+%% ======================= Helper: Initial two-group APV ===================
+function x0 = two_group_init(N, d, A)
+% Place N/2 at the left end and N/2 at the right end, spaced by d.
+left_cnt  = floor(N/2);
+right_cnt = N - left_cnt;
+left_grp  = (0:left_cnt-1)*d;
+right_grp = A - (right_cnt-1:-1:0)*d;  % ensures inclusion of x=A
+x0 = [left_grp, right_grp];
+x0 = sort(x0);
+% Sanity check: min spacing
+if min(diff(x0)) < d - 1e-9
+    error('Initial APV violates minimum spacing d.');
+end
+end
+
+%% ================== Helper: Objective (inverse trace) ====================
+function val = objective_inverse_trace(x, u_grid, r_grid)
+% Compute 1 / ( CRBu(x) + max_{u in U, r in R} CRBr(x,u,r) )
+% Using eqs (21),(22) up to a common scaling constant kappa (cancels in argmax).
+
+[varx, varx2, covxx2, Delta] = moment_terms(x);
+epsD = 1e-12;
+Delta = max(Delta, epsD);  % avoid degenerate geometry
+
+% CRBu(x) (drop kappa):
+CRBu = varx2 / Delta;
+
+% Precompute grids for max CRBr
+[U, R] = ndgrid(u_grid, r_grid);
+num = 4*(R.^4)*varx + 8*U.*(R.^3)*covxx2 + 4*(U.^2).*(R.^2)*varx2;
+den = (1 - U.^2).^2;                 % avoid U=1
+CRBr_grid = num ./ (den * Delta);    % (kappa cancelled)
+
+% Worst-case over (u,r)
+CRBr_worst = max(CRBr_grid, [], 'all');
+
+val = 1 / (CRBu + CRBr_worst);
+end
+
+%% =================== Helper: Moment/Variance/Covariance ==================
+function [varx, varx2, covxx2, Delta] = moment_terms(x)
+% x: 1xN vector of positions
+x = x(:).';                % row
+N = numel(x);
+x2 = x.^2;
+
+mx  = mean(x);
+mx2 = mean(x2);
+
+varx  = mean(x.^2) - mx^2;
+varx2 = mean(x2.^2) - mx2^2;
+covxx2 = mean(x.*x2) - mx*mx2;
+
+Delta = varx*varx2 - covxx2^2;  % denominator in CRB expressions
+end
+
+%% ==================== Helper: Split APV into groups =====================
+function groups = split_into_groups(x_sorted, d, tol)
+% Greedy clustering: start new group when gap deviates from ~d
+dx = diff(x_sorted);
+groups = ones(size(x_sorted));
+g = 1;
+for i = 1:numel(dx)
+    if abs(dx(i) - d) <= tol
+        groups(i+1) = g;
+    else
+        g = g + 1;
+        groups(i+1) = g;
+    end
+end
+end
