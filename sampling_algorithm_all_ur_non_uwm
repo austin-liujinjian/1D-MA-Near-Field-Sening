@@ -1,8 +1,10 @@
-% Near-field MA sensing with range-dependent amplitude
-% Discrete sampling + sequential update (Algorithm 1 style) for a fixed (u,r)
-% Objective: minimize Tr(CRB) = (1/S0) * Tr( (Sigma_G + Sigma_H)^{-1} ) at given (u,r)
+% Near-field MA sensing (min-max robust design over (u,r))
+% Discrete sampling + sequential update (Algorithm 1 style)
+% Minimize worst-case Tr(CRB) over (u,r) in a grid domain:
+%     J_max(x) = max_{(u,r)} (1/S0) * Tr( (Sigma_G + Sigma_H)^(-1) )
+
 clc; clear; close all;
-fprintf('Running sampling_algorithm_all_ur_non_uwm (script, FIXED)...\n');
+fprintf('Running sampling_algorithm_minmax_ur (script)...\n');
 
 %% ------------------------- Problem parameters ---------------------------
 lambda = 1;                 % normalized wavelength
@@ -10,30 +12,32 @@ N      = 16;                % number of antennas
 d      = 0.15*lambda;       % minimum spacing
 a      = 5*lambda;          % half-aperture; domain is [-a, a]
 A      = 2*a;               % full length
-M      = 4000;              % number of discrete candidate positions
-S      = linspace(-a, +a, M);   % candidate positions on [-a, a]
+M      = 4000;              % number of discrete candidate positions for x
+S      = linspace(-a, +a, M);
 
-% Near-field distance bounds (typical textbook formulas; replace with your paper's exact range if needed)
+% Near-field distance bounds (typical formulas; adjust if needed)
 R_FS  = 0.62*sqrt(A^3/lambda);   % Fresnel (near-field) lower bound
 R_RL  = 2*A^2/lambda;            % Rayleigh distance (far-field) boundary
 r_min = R_FS;
 r_max = R_RL/2;
 
-% Fixed target parameters (u = cos(theta), r > 0)
-u = 0.99;                  % |u| < 1
-r = 50;                    % range (units consistent with lambda)
-if abs(u) >= 1, error('u must satisfy |u| < 1.'); end
+% Worst-case domain for (u,r)
+% u \in (-1,1), r \in [r_min, r_max]. Avoid endpoints numerically.
+Nu = 21;  Nr = 21;
+u_grid = linspace(-0.99, 0.99, Nu);
+r_grid = linspace(r_min, r_max, Nr);
+
 if (N-1)*d > 2*a + 1e-12
     error('(N-1)*d must be <= 2a to fit N=%d with spacing d=%g.', N, d);
 end
 
 %% --------------------- Initialization (two-group ends) ------------------
-apv_init = two_group_init_sym(N, d, a);   % ends-loaded pattern on [-a, a]
+apv_init = two_group_init_sym(N, d, a);   % ends-loaded pattern
 apv_star = apv_init;                      % working solution
 apv_fixR = apv_init;                      % anchors for not-yet-updated elements
 
 %% ------------------- Sequential update over elements --------------------
-num_outer_pass = 20;   % more passes reduce greediness
+num_outer_pass = 12;   % more passes reduce greediness
 for pass = 1:num_outer_pass
     for n = 1:N
         % Build feasible set S_n respecting min spacing to both updated left and anchored right
@@ -49,22 +53,20 @@ for pass = 1:num_outer_pass
             error('Feasible set empty at n=%d (pass %d). Increase M or relax constraints.', n, pass);
         end
 
-        % Evaluate objective at each candidate position for antenna n (fixed u, r)
+        % Evaluate worst-case objective at each candidate position for antenna n
         scores = -inf(1, numel(S_n));
         left_fixed  = apv_star(1:n-1);
         right_fixed = apv_fixR(n+1:N);
-        u_local = u; r_local = r;
 
         for k = 1:numel(S_n)
             s = S_n(k);
             x_hat = sort([left_fixed, s, right_fixed]);  % candidate APV
-            % reject if any spacing violated (numerical tolerance)
             if any(diff(x_hat) < d - 1e-9)
                 scores(k) = -inf; 
                 continue;
             end
-            % Tr(CRB) at fixed (u,r): minimize => maximize negative
-            scores(k) = -objective_trace_crb_fixed(x_hat, u_local, r_local, lambda);
+            % Worst-case Tr(CRB) over (u,r): minimize => maximize negative score
+            scores(k) = -objective_trace_crb_worst(x_hat, u_grid, r_grid, lambda);
         end
 
         % Commit best candidate for antenna n
@@ -76,6 +78,11 @@ for pass = 1:num_outer_pass
 end
 
 apv_opt = sort(apv_star);
+
+% Report the worst-case value & the achieving (u*, r*) for the final design
+[Jworst_opt, u_star, r_star] = objective_trace_crb_worst(apv_opt, u_grid, r_grid, lambda);
+fprintf('Optimized APV (positions, in units of lambda):\n'); disp(apv_opt.');
+fprintf('Worst-case Tr(CRB) value (scaled) = %.6g at u*=%.4f, r*=%.4f\n', Jworst_opt, u_star, r_star);
 
 %% ------------------------------ Plot ------------------------------------
 figure('Color','w'); hold on; box on;
@@ -89,10 +96,10 @@ end
 plot([-a a],[0 0],'k-','LineWidth',1.5);
 xline(-a,'k:','LineWidth',1); xline(a,'k:','LineWidth',1); xline(0,'k--');
 xlabel('Position x (on [-a,a])'); yticks([]); ylim([-0.3 0.3]); xlim([-a a]);
-title(sprintf('Optimized APV for fixed u=%.3f, r=%.3f (range-dependent amplitude)', u, r));
+title(sprintf('Min-max APV (worst-case over u \\in [%.2f,%.2f], r \\in [%.2f,%.2f])', ...
+    min(u_grid), max(u_grid), min(r_grid), max(r_grid)));
 legend(arrayfun(@(g) sprintf('Group %d',g), 1:max(groups), 'UniformOutput',false), ...
        'Location','northoutside','Orientation','horizontal');
-fprintf('Optimized APV (positions, in units of lambda):\n'); disp(apv_opt.');
 drawnow;
 
 %% ---------------------------- Helpers -----------------------------------
@@ -104,10 +111,26 @@ right = +a - (0:(N-K-1))*d;
 x0 = sort([left, right]);
 end
 
+function [Jmax, u_star, r_star] = objective_trace_crb_worst(x, u_grid, r_grid, lambda)
+% Worst-case objective over (u,r):
+%   Jmax(x) = max_{(u,r)} (1/S0) * Tr( (Sigma_G + Sigma_H)^(-1) )
+    Jmax = -inf;
+    u_star = NaN; r_star = NaN;
+    for iu = 1:numel(u_grid)
+        u = u_grid(iu);
+        for ir = 1:numel(r_grid)
+            r = r_grid(ir);
+            J = objective_trace_crb_fixed(x, u, r, lambda);
+            if J > Jmax
+                Jmax = J; u_star = u; r_star = r;
+            end
+        end
+    end
+end
+
 function J = objective_trace_crb_fixed(x, u, r, lambda)
-% Objective at fixed (u,r): Tr(CRB) ∝ (1/S0) * Tr( (Sigma_G + Sigma_H)^{-1} )
-% Return the actual quantity (1/S0)*trace(inv(Sig)) up to a common constant.
-    [Sig, S0] = sigma_blocks(x, u, r, lambda);    % Σ = Σ_G + Σ_H (param order [u,r]), and S0 = sum(β^2)
+% Objective at fixed (u,r): Tr(CRB) ∝ (1/S0) * Tr( (Sigma_G + Sigma_H)^(-1) )
+    [Sig, S0] = sigma_blocks(x, u, r, lambda);  % Sig = Sigma_G + Sigma_H, S0 = sum(beta^2)
     if any(isnan(Sig(:))) || any(~isfinite(Sig(:))) || S0 <= 0
         J = inf; return;
     end
@@ -116,39 +139,40 @@ function J = objective_trace_crb_fixed(x, u, r, lambda)
     if p ~= 0
         J = inf; return;
     end
-    % Use linear solve (more stable than inv)
+    % Stable trace of inverse
     J = trace(Sig \ eye(2)) / S0;
 end
 
 function [Sig, S0] = sigma_blocks(x, u, r, lambda)
-% Build Σ_G(w) + Σ_H(w) from amplitude-weighted covariances (weights w ∝ β^2)
-% Exact path length r_m(x) and exact amplitude β_m used
+% Build Sigma_G(w) + Sigma_H(w) from amplitude-weighted covariances
+% Exact path length r_m(x) and exact amplitude B_m used
 % Fresnel-phase gradients for G_u, G_r; log-amplitude gradients H_u, H_r exact
 %
-% IMPORTANT: Both blocks use the SAME parameter order [u, r].
+% IMPORTANT: Both Sigma_G and Sigma_H MUST share the SAME parameter order [u, r].
+
     x = x(:).';
-    kappa = 2*pi/lambda;                     % kappa = 2π/λ
+    kappa = 2*pi/lambda;                          % kappa = 2π/λ
 
     % Geometry and exact amplitude
-    rm = sqrt(r^2 - 2*r*u*x + x.^2);         % exact path length to each sensor
-    Bm = 1 ./ sqrt(4*pi*rm.^2);              % exact amplitude β_m (up to constant 4π)
+    rm = sqrt(r^2 - 2*r*u*x + x.^2);              % exact path length
+    Bm = 1 ./ sqrt(4*pi*rm.^2);                   % exact amplitude
     B2 = Bm.^2;
-    S0 = sum(B2);                            % total received power ∝ ∑ β_m^2
-    w  = B2 / max(S0, eps);                  % normalized weights
+    S0 = sum(B2);                                 % total received power factor
+    w  = B2 / max(S0, eps);                       % normalized weights
 
     % Fresnel-phase approximation (near-field quadratic phase):
-    % phi(x) ≈ κ ( u x + (1 - u^2) x^2 / (2 r) )
-    % => gradients:
-    Gu = kappa * ( x + (u * x.^2) / r );           % ∂phi/∂u
-    Gr = kappa * ( (1 - u^2) * x.^2 ) / (2*r^2 );  % ∂phi/∂r
+    % phi(x) ≈ κ [ u x + (1 - u^2) x^2 / (2 r) ]
+    % => gradients w.r.t. [u, r]:
+    Gu = kappa * ( x + (u * x.^2) / r );          % ∂phi/∂u
+    Gr = kappa * ( (1 - u^2) * x.^2 ) / (2*r^2 ); % ∂phi/∂r
 
-    % Log-amplitude gradients from exact amplitude model β_m = 1/sqrt(4π r_m^2):
-    % ln β_m = - ln r_m + const  =>  ∂/∂r, ∂/∂u as below
-    Hr = -(r - u*x) ./ rm.^2;     % ∂(ln β)/∂r
-    Hu =  (r * x)   ./ rm.^2;     % ∂(ln β)/∂u
+    % Log-amplitude gradients (exact):
+    % log Bm = -log r_m + const
+    Hu =  (r * x)   ./ rm.^2;                     % ∂/∂u log B = (r x)/r_m^2
+    Hr = -(r - u*x) ./ rm.^2;                     % ∂/∂r log B = -(r - u x)/r_m^2
 
     % Weighted means
-    mw  = @(f) sum(w .* f);
+    mw = @(f) sum(w .* f);
     Gu0 = Gu - mw(Gu);  Gr0 = Gr - mw(Gr);
     Hu0 = Hu - mw(Hu);  Hr0 = Hr - mw(Hr);
 
@@ -157,19 +181,15 @@ function [Sig, S0] = sigma_blocks(x, u, r, lambda)
     covw = @(f0,g0) sum(w .* (f0 .* g0));
 
     Var_Gu   = varw(Gu0);   Var_Gr   = varw(Gr0);
-    Cov_GuGr = covw(Gu0, Gr0);
+    Cov_GuGr = covw(Gu0,Gr0);
 
     Var_Hu   = varw(Hu0);   Var_Hr   = varw(Hr0);
-    Cov_HuHr = covw(Hu0, Hr0);
+    Cov_HuHr = covw(Hu0,Hr0);
 
-    % --- USE THE SAME PARAMETER ORDER [u, r] FOR BOTH BLOCKS ---
-    % Σ_G(w) = [ Var(G_u)   Cov(G_u,G_r);
-    %            Cov(G_u,G_r) Var(G_r) ]
+    % SAME parameter order [u, r] for BOTH blocks
     Sigma_G = [Var_Gu,      Cov_GuGr;
                Cov_GuGr,    Var_Gr];
 
-    % Σ_H(w) = [ Var(H_u)   Cov(H_u,H_r);
-    %            Cov(H_u,H_r) Var(H_r) ]
     Sigma_H = [Var_Hu,      Cov_HuHr;
                Cov_HuHr,    Var_Hr];
 
