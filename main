@@ -1,169 +1,187 @@
-% Joint AoA & Range Estimation: Discrete Sampling Optimization for APV
-% Reproduces Fig.5-style optimized antenna positions (three-group geometry)
-% References: Section V & Algorithm 1 (discrete sampling) in the paper.
-% Author: (your name), Date: (today)
+function apv_joint = optimize_apv_joint_fig5_parallel(useGPU)
+% Parallel discrete-sampling optimizer for APV (Section V, Algorithm 1)
+% - Inner loop (candidate scoring) is parallelized with PARFOR
+% - Optional GPU acceleration for the (u,r)-grid worst-case search
+%
+% Usage:
+%   apv = optimize_apv_joint_fig5_parallel(false);   % CPU parallel only
+%   apv = optimize_apv_joint_fig5_parallel(true);    % CPU + GPU (if available)
 
-function apv_joint = optimize_apv_joint_fig5()
-clc; clear; close all;
+if nargin < 1, useGPU = false; end
+clc; clearvars -except useGPU; close all;
 
 %% ------------------------- Problem Parameters ---------------------------
-lambda = 1.0;                 % wavelength (normalized units)
-N      = 16;                  % number of antennas
-d      = 0.5*lambda;          % minimum inter-antenna spacing
-A      = 10*lambda;           % movement region length
-M      = 2000;                % number of discrete sampling points (M >> N)
-S      = linspace(0, A, M);   % discrete candidate locations
+lambda = 1.0;
+N      = 16;
+d      = 0.5*lambda;
+A      = 10*lambda;
+M      = 2000;
+S      = linspace(0, A, M);
 
-% Near-field distance bounds (standard forms used in antenna literature)
-R_FS = 0.62*sqrt(A^3/lambda);   % Fresnel (near-field) lower bound
-R_RL = 2*A^2/lambda;            % Rayleigh distance (Fraunhofer) upper bound
+% Near-field range (use your paper's exact bounds if needed)
+R_FS  = 0.62*sqrt(A^3/lambda);
+R_RL  = 2*A^2/lambda;
 r_min = R_FS;
 r_max = R_RL/2;
 
-% Worst-case search grids for u and r (avoid u=1 singularity):
-Nu = 101;                         % # of AoA grid points
-Nr = 151;                         % # of range grid points
-u_grid = linspace(0, 0.99, Nu);   % u in [0,1)
+Nu = 101;  Nr = 151;                 % (u,r) grid size
+u_grid = linspace(0, 0.99, Nu);
 r_grid = linspace(r_min, r_max, Nr);
 
-% Numerical tolerance for spacing / grouping
-tol = 1e-6;
-
-%% --------------------- Initialization (Theorem 1) -----------------------
-% Two-group "ends" geometry: half the elements at the left end, half at right end
-apv_init = two_group_init(N, d, A);
-
-% Pre-allocate the working vectors for the sequential update
-apv_star = nan(1, N);         % will store updated positions x*_1..x*_N
-apv_fixR = apv_init;          % right-side (yet-to-update) placeholders
-
-%% ------------------- Sequential Discrete Sampling Update ----------------
-% One forward pass n = 1..N as in Algorithm 1 of the paper
-for n = 1:N
-    % 1) Build feasible candidate set S_n satisfying min spacing to already-picked
-    S_mask = true(size(S));
-    % Must keep >= d away from previously updated x*_1..x*_(n-1)
-    for i = 1:n-1
-        S_mask = S_mask & (abs(S - apv_star(i)) >= d - tol);
+% Start a thread-based or process-based pool (choose one)
+pool = gcp('nocreate');
+if isempty(pool)
+    % If your MATLAB supports thread-based pool & your code is CPU-bound,
+    % threads pool is convenient and light-weight:
+    try
+        parpool('threads');
+    catch
+        parpool; % fallback to default cluster profile
     end
-    % Must keep >= d away from the remaining (not-yet-updated) initial positions
-    for j = n+1:N
-        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - tol);
-    end
-    S_n = S(S_mask);
-    if isempty(S_n)
-        error('Feasible set S_n is empty at n=%d. Increase M or relax tol.', n);
-    end
-
-    % 2) Evaluate objective for each candidate s in S_n:
-    %    F_eta(x_hat) = 1 / ( CRBu(x_hat) + max_{u,r} CRBr(x_hat, u, r) )
-    best_val = -inf;
-    best_s   = NaN;
-    for k = 1:numel(S_n)
-        s = S_n(k);
-        x_hat = [apv_star(1:n-1), s, apv_fixR(n+1:N)];  % candidate APV
-        score = objective_inverse_trace(x_hat, u_grid, r_grid);
-        if score > best_val
-            best_val = score;
-            best_s   = s;
-        end
-    end
-
-    % 3) Accept the best s for antenna n
-    apv_star(n) = best_s;
-    % 4) Proceed to next n (the loop updates feasibility automatically)
 end
 
-% Sort final APV in ascending order (purely for display aesthetics)
+%% --------------------- Initialization (two-group) -----------------------
+apv_init = two_group_init(N, d, A);
+apv_star = nan(1, N);
+apv_fixR = apv_init;
+
+%% ------------------- Prepare GPU grids (optional) -----------------------
+if useGPU
+    try
+        U_gpu = gpuArray(repmat(u_grid(:), 1, numel(r_grid)));
+        R_gpu = gpuArray(repmat(r_grid(:).', numel(u_grid), 1));
+    catch ME
+        warning('GPU not available or failed to initialize: %s\nUsing CPU only.', ME.message);
+        useGPU = false;
+        U_gpu = []; R_gpu = [];
+    end
+else
+    U_gpu = []; R_gpu = [];
+end
+
+%% ------------------- Sequential update over elements --------------------
+for n = 1:N
+    % ----- Build feasible candidate set S_n (respect min spacing d) -----
+    S_mask = true(size(S));
+
+    % Keep >= d from already-updated left portion
+    for i = 1:n-1
+        S_mask = S_mask & (abs(S - apv_star(i)) >= d - 1e-9);
+    end
+    % Keep >= d from not-yet-updated right portion (current initial anchors)
+    for j = n+1:N
+        S_mask = S_mask & (abs(S - apv_fixR(j)) >= d - 1e-9);
+    end
+
+    S_n = S(S_mask);
+    if isempty(S_n)
+        error('Feasible set S_n is empty at n=%d. Increase M or relax constraints.', n);
+    end
+
+    % ----- Parallel scoring over candidates s in S_n -----
+    scores = -inf(1, numel(S_n));  % preallocate for PARFOR
+    % Create read-only snapshots for the parfor body
+    left_fixed  = apv_star(1:n-1);
+    right_fixed = apv_fixR(n+1:N);
+    ugrid_local = u_grid;    %#ok<NASGU> (captured by parfor)
+    rgrid_local = r_grid;    %#ok<NASGU>
+    U_local_gpu = U_gpu;     %#ok<NASGU>
+    R_local_gpu = R_gpu;     %#ok<NASGU>
+    useGPU_local = useGPU;   %#ok<NASGU>
+
+    parfor k = 1:numel(S_n)
+        s = S_n(k);
+        x_hat = [left_fixed, s, right_fixed];  % candidate APV
+
+        % Compute 1 / ( CRBu(x) + max_{u,r} CRBr(x,u,r) )
+        scores(k) = objective_inverse_trace_parallel( ...
+                        x_hat, ugrid_local, rgrid_local, ...
+                        useGPU_local, U_local_gpu, R_local_gpu);
+    end
+
+    % ----- Pick the best candidate and commit -----
+    [~, idx] = max(scores);
+    best_s   = S_n(idx);
+    apv_star(n) = best_s;
+end
+
 apv_joint = sort(apv_star);
 
-% Print optimized APV
-fprintf('Optimized APV (x in wavelengths):\n');
-disp(apv_joint.');
-
-%% ------------------------------ Plot (Fig.5-like) -----------------------
+%% ------------------------------ Plot ------------------------------------
 figure('Color','w'); hold on; box on;
 y0 = zeros(size(apv_joint));
-
-% Identify contiguous half-wavelength-spaced groups and color them
 groups = split_into_groups(apv_joint, d, 1e-3*d);
 colors = lines(max(groups));
 for g = 1:max(groups)
     idx = find(groups == g);
     scatter(apv_joint(idx), y0(idx), 70, colors(g,:), 'filled', 'MarkerEdgeColor','k');
 end
-
-% Aesthetics to mimic Fig.5 style
 plot([0 A],[0 0],'k-','LineWidth',1.5);
 xline(0,'k:','LineWidth',1); xline(A,'k:','LineWidth',1);
-xlabel('Position x'); ylabel('');
-yticks([]); ylim([-0.3 0.3]);
-xlim([0 A]);
-title('Optimized APV for Joint AoA & Range Estimation');
+xlabel('Position x'); yticks([]); ylim([-0.3 0.3]); xlim([0 A]);
+title('Optimized APV (Parallel Candidate Scoring)');
 legend(arrayfun(@(g) sprintf('Group %d',g), 1:max(groups), 'UniformOutput',false), ...
        'Location','northoutside','Orientation','horizontal');
 
+fprintf('Optimized APV (x in wavelengths):\n'); disp(apv_joint.');
+
 end
 
-%% ======================= Helper: Initial two-group APV ===================
-function x0 = two_group_init(N, d, A)
-% Place N/2 at the left end and N/2 at the right end, spaced by d.
-left_cnt  = floor(N/2);
-right_cnt = N - left_cnt;
-left_grp  = (0:left_cnt-1)*d;
-right_grp = A - (right_cnt-1:-1:0)*d;  % ensures inclusion of x=A
-x0 = [left_grp, right_grp];
-x0 = sort(x0);
-% Sanity check: min spacing
-if min(diff(x0)) < d - 1e-9
-    error('Initial APV violates minimum spacing d.');
-end
-end
-
-%% ================== Helper: Objective (inverse trace) ====================
-function val = objective_inverse_trace(x, u_grid, r_grid)
-% Compute 1 / ( CRBu(x) + max_{u in U, r in R} CRBr(x,u,r) )
-% Using eqs (21),(22) up to a common scaling constant kappa (cancels in argmax).
-
+%% ================== Objective (CPU/GPU aware) ===========================
+function val = objective_inverse_trace_parallel(x, u_grid, r_grid, useGPU, U_gpu, R_gpu)
 [varx, varx2, covxx2, Delta] = moment_terms(x);
-epsD = 1e-12;
-Delta = max(Delta, epsD);  % avoid degenerate geometry
+Delta = max(Delta, 1e-12);
 
-% CRBu(x) (drop kappa):
+% CRBu: scale factor cancels in optimization
 CRBu = varx2 / Delta;
 
-% Precompute grids for max CRBr
-[U, R] = ndgrid(u_grid, r_grid);
-num = 4*(R.^4)*varx + 8*U.*(R.^3)*covxx2 + 4*(U.^2).*(R.^2)*varx2;
-den = (1 - U.^2).^2;                 % avoid U=1
-CRBr_grid = num ./ (den * Delta);    % (kappa cancelled)
+if ~useGPU
+    % ----- CPU path -----
+    [U, R] = ndgrid(u_grid, r_grid);
+    num = 4*(R.^4)*varx + 8*U.*(R.^3)*covxx2 + 4*(U.^2).*(R.^2)*varx2;
+    den = (1 - U.^2).^2;
+    CRBr_grid = num ./ (den * Delta);
+    CRBr_worst = max(CRBr_grid, [], 'all');
+else
+    % ----- GPU path (only grid math on GPU) -----
+    varx_g  = gpuArray(varx);
+    varx2_g = gpuArray(varx2);
+    cov_g   = gpuArray(covxx2);
+    Delta_g = gpuArray(Delta);
 
-% Worst-case over (u,r)
-CRBr_worst = max(CRBr_grid, [], 'all');
+    num_g = 4*(R_gpu.^4)*varx_g + 8*U_gpu.*(R_gpu.^3)*cov_g + 4*(U_gpu.^2).*(R_gpu.^2)*varx2_g;
+    den_g = (1 - U_gpu.^2).^2;
+    CRBr_worst = gather(max(num_g ./ (den_g * Delta_g), [], 'all'));
+end
 
 val = 1 / (CRBu + CRBr_worst);
 end
 
-%% =================== Helper: Moment/Variance/Covariance ==================
-function [varx, varx2, covxx2, Delta] = moment_terms(x)
-% x: 1xN vector of positions
-x = x(:).';                % row
-N = numel(x);
-x2 = x.^2;
-
-mx  = mean(x);
-mx2 = mean(x2);
-
-varx  = mean(x.^2) - mx^2;
-varx2 = mean(x2.^2) - mx2^2;
-covxx2 = mean(x.*x2) - mx*mx2;
-
-Delta = varx*varx2 - covxx2^2;  % denominator in CRB expressions
+%% ======================= Initial two-group APV ==========================
+function x0 = two_group_init(N, d, A)
+left_cnt  = floor(N/2);
+right_cnt = N - left_cnt;
+left_grp  = (0:left_cnt-1)*d;
+right_grp = A - (right_cnt-1:-1:0)*d;
+x0 = sort([left_grp, right_grp]);
+if any(diff(x0) < d - 1e-9)
+    error('Initial APV violates min spacing d.');
+end
 end
 
-%% ==================== Helper: Split APV into groups =====================
+%% =================== Moments: var/cov building blocks ===================
+function [varx, varx2, covxx2, Delta] = moment_terms(x)
+x  = x(:).';
+x2 = x.^2;
+mx  = mean(x);   mx2 = mean(x2);
+varx   = mean(x.^2) - mx^2;
+varx2  = mean(x2.^2) - mx2^2;
+covxx2 = mean(x.*x2) - mx*mx2;
+Delta = varx*varx2 - covxx2^2;
+end
+
+%% =================== Grouping for Fig.5-style coloring ==================
 function groups = split_into_groups(x_sorted, d, tol)
-% Greedy clustering: start new group when gap deviates from ~d
 dx = diff(x_sorted);
 groups = ones(size(x_sorted));
 g = 1;
