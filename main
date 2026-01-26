@@ -1,369 +1,421 @@
-%% two_stage_all_cvx.m
-% Full CVX(SDPT3) two-stage pipeline, no YALMIP, no MOSEK.
-% Stage I  (SDP in m,W,tau): equivalent to 1D degree-4 Lasserre(d=2) relaxation
-% Stage II (A-TKMP SDR_k): flat extension + extraction
-%
-% Requirements: CVX installed + cvx_setup done. Use SDPT3 backend.
+%% Monostatic Sensing Array Design via Lasserre Hierarchy & Atomic Extraction
+% Based on draft-0126-monostatic.pdf
+% Implements the Two-Stage Algorithm:
+%   Stage 1: Global optimization via Lasserre Moment-SOS Hierarchy (Order d=2)
+%   Stage 2: Flat extension and atomic extraction
 
 clear; clc; close all;
 
-%% ----------------- Basic parameters -----------------
-N    = 25;          % desired number of antennas (after discretization)
-D    = 0.50;        % aperture length
-a    = D/2;         % support [-a,a]
-epsJ = 1e-6;        % Jbar >= epsJ * I
-kmax = 6;           % Stage II: try k=2..kmax
+%% 1. SYSTEM PARAMETERS
+fprintf('--- Setting up System Parameters ---\n');
+N_ant = 8;              % Number of antennas (N)
+D_lambda = 10;          % Aperture length in wavelengths (D/lambda)
+a_lambda = D_lambda/2;  % Half-aperture
+theta_deg = 30;         % Target AoA (degrees)
+R_lambda = 50;          % Target range in wavelengths (r/lambda)
 
-cvx_solver_name = 'sdpt3';
-verbose = 1;
+% Normalized parameters (working with normalized units to improve numerical stability)
+u = cosd(theta_deg);    % Directional cosine
+r = R_lambda;           % Range
+a = a_lambda;           % Half-aperture limit
+N = N_ant;
 
-UR_list = [0.2 2.5];   % you can add more rows: [u r; u r; ...]
+% FIM Constants (Normalized c=1 for optimization as per Source 294)
+% We explicitly define the coefficients for J_uu, J_rr, J_ur based on Eq (17)-(19)
+% J terms are quadratic functions of m = [1, m1, m2, m3, m4]
+% Note: m_k are normalized by N in the definition, but here we treat m as the variables directly.
 
-rng(1);
+%% 2. STAGE I: Lasserre Hierarchy Optimization (Order d=2)
+fprintf('--- Stage I: Solving Lasserre Hierarchy SDP (d=2) ---\n');
 
-for tcase = 1:size(UR_list,1)
-    u = UR_list(tcase,1);
-    r = UR_list(tcase,2);
+% We define the optimization variables for the Lasserre hierarchy.
+% The "Base Variables" xi are: [m1, m2, m3, m4, w11, w12, w22, tau]
+% Dimension n_xi = 8.
+% We need moments of xi up to degree 2*d = 4.
 
-    fprintf('\n==============================\n');
-    fprintf('Target (u,r) = (%.4f, %.4f)\n', u, r);
+n_xi = 8; 
+deg_relaxation = 2; % Order d=2
+deg_moments = 2 * deg_relaxation;
 
-    %% tau upper bound from a feasible ULA
-    x_ula = linspace(-a,a,N).';
-    m_ula = moments_from_x(x_ula);
-    tau_ula = trace(inv(Jbar_from_m(m_ula,u,r)));
-    tauub   = 1.2 * tau_ula;
-    fprintf('tau_ub (from ULA) = %.6e\n', tauub);
+% Generate monomial basis powers for variables xi
+% Columns: [m1, m2, m3, m4, w11, w12, w22, tau]
+powers = generate_monomial_powers(n_xi, deg_moments);
+n_y = size(powers, 1); % Total number of moment variables
 
-    %% Optional: feasibility sanity check at ULA point (for your own debugging)
-    check_feasible_point_ULA(u,r,a,epsJ,tauub,N);
+% Indices helper
+idx_const = 1; % Index for monomial 1 (power 0)
+% Find index for tau (variable 8)
+idx_tau = find(powers(:,8)==1 & sum(powers(:,1:7),2)==0);
 
-    %% ----------------- Stage I (CVX SDP, stable) -----------------
-    [mstar, tau_star, Wstar, info1] = stage1_sdp_m_cvx(u,r,a,epsJ,tauub,cvx_solver_name,verbose);
-    fprintf('\nStage I done: status=%s, tau_star=%.6e\n', info1.cvx_status, tau_star);
-    fprintf('m*=[m0..m4]=[%.4e %.4e %.4e %.4e %.4e]\n', mstar);
-
-    %% ----------------- Stage II (CVX A-TKMP flat extension) -----------------
-    [zstar, k_used, flat_rank, info2] = stage2_ATKMP_flat_extension_cvx(mstar, a, kmax, cvx_solver_name, verbose);
-    fprintf('\nStage II done: status=%s, k_used=%d, rank=%d\n', info2.cvx_status, k_used, flat_rank);
-
-    %% ----------------- Extraction (atoms) -----------------
-    [t_atoms, w_atoms] = extract_atoms_1d_from_z(zstar, mstar, a, flat_rank);
-    fprintf('\nExtracted atoms (ti, wi):\n');
-    disp([t_atoms(:), w_atoms(:)]);
-
-    %% ----------------- Discretize to N antennas -----------------
-    x_design = discretize_atoms_to_N(t_atoms, w_atoms, N);
-
-    %% ----------------- Evaluate objective -----------------
-    m_design   = moments_from_x(x_design);
-    tau_design = trace(inv(Jbar_from_m(m_design,u,r)));
-    fprintf('Objective check: tau(design)=%.6e\n', tau_design);
-
-    %% ----------------- Plot -----------------
-    plot_design(100+tcase, a, x_design, t_atoms, w_atoms, u, r, tau_star, tau_design);
-end
-
-%% =====================================================================
-%% =============================== Stage I ==============================
-%% =====================================================================
-function [mstar, tau_star, Wstar, info] = stage1_sdp_m_cvx(u,r,a,epsJ,tauub,cvx_solver_name,verbose)
-% Stable CVX Stage I:
-% decision variables: m1..m4, W (2x2), tau
-% constraints:
-%   M2(m) >= 0, M1(m) >= 0   (1D degree-4 truncated moment feasibility on [-a,a])
-%   Jbar(m) >= epsJ*I
-%   [Jbar  I; I  W] >= 0     (Schur: W >= Jbar^{-1})
-%   W >= 0
-%   tau >= trace(W), 0 <= tau <= tauub
-% plus moment bounds (redundant but stabilizing): |m1|<=a, 0<=m2<=a^2, |m3|<=a^3, 0<=m4<=a^4
-
-cvx_clear;
-
+% CVX Setup
 cvx_begin sdp
-    if verbose==0, cvx_quiet(true); end
-    cvx_solver(cvx_solver_name);
-
-    variables m1 m2 m3 m4 tau
-    variable W(2,2) symmetric
-
-    % Moment LMIs (degree 4 on [-a,a])
-    M2 = [1,  m1, m2;
-          m1, m2, m3;
-          m2, m3, m4];
-
-    M1 = [a^2*1 - m2,    a^2*m1 - m3;
-          a^2*m1 - m3,   a^2*m2 - m4];
-
-    % Jbar(m)
-    Juu = m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2;
-    Jrr = ((1-u^2)^2/(4*r^4))*(m4 + m2^2);
-    Jur = ((1-u^2)/(2*r^2))*( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
-    Jbar = [Juu, Jur; Jur, Jrr];
-
-    minimize( tau )
-
+    variable y(n_y)
+    
+    % Objective: Minimize tau
+    % L_y(tau) corresponds to the moment variable for tau
+    minimize( y(idx_tau) )
+    
     subject to
-        % basic bounds (stabilize; valid for support [-a,a])
-        -a   <= m1 <= a;
-         0   <= m2 <= a^2;
-        -a^3 <= m3 <= a^3;
-         0   <= m4 <= a^4;
+    
+        % 1. Normalization: y_0 = 1 (Source 388)
+        y(idx_const) == 1;
+        
+        % 2. Moment Matrix Constraint M_d(y) >= 0 (Source 387)
+        % Create indices for M_d(y)
+        [Md_idx, dim_Md] = build_moment_matrix_idx(powers, deg_relaxation);
+        M_d = y(Md_idx);
+        M_d == semidefinite(dim_Md);
+        
+        % 3. Localizing Constraints for Validity of m on [-a, a] (Source 362)
+        % Constraint: M_2(m) >= 0 (Hankel matrix of m)
+        % This requires M_{d-1}( M_2(m) * y ) >= 0
+        % M_2(m) is linear in m.
+        % Construct block matrix indices locally
+        % Basis for localizing matrix (degree d-1 = 1)
+        [basis_local, dim_local] = get_basis_indices(powers, deg_relaxation - 1);
+        
+        % Hankel structure of m: [1, m1, m2; m1, m2, m3; m2, m3, m4]
+        % We build the 3x3 block matrix where each block is a localizing matrix
+        H_m = cell(3,3);
+        % Map m indices: 0->const, 1->m1(var1), 2->m2(var2), ...
+        var_map = [0, 1, 2, 3, 4]; 
+        for i = 1:3
+            for j = 1:3
+                deg_m = var_map(i) + var_map(j); % Degree of m required (e.g., m_{i+j-2})
+                % We need to multiply variable m_{deg_m} with the basis
+                % If deg_m = 0, coeff is 1. If deg_m > 0, variable index is deg_m.
+                H_m{i,j} = build_localizing_block(y, powers, basis_local, deg_m);
+            end
+        end
+        % Assemble and constrain
+        mat_Hm = cell2mat(H_m);
+        mat_Hm == semidefinite(3 * dim_local);
+        
+        % Constraint: M_1(g*m) >= 0 (Bounds)
+        % g(t) = a^2 - t^2. 
+        % This implies m constraints like a^2 - m2 >= 0, etc.
+        % We implement the standard Localizing Matrix for g(t) = a^2 - t^2
+        % M_1(g) = [L(a^2 - t^2), L(t(a^2 - t^2)); ...]
+        % Simpler: Just enforce the Hankel forms of a^2*M_k - M_{k+2} >= 0
+        % Block 1: a^2*m0 - m2
+        blk1 = a^2 * build_localizing_block(y, powers, basis_local, 0) - ...
+               build_localizing_block(y, powers, basis_local, 2);
+        % Block 2: a^2*m1 - m3
+        blk2 = a^2 * build_localizing_block(y, powers, basis_local, 1) - ...
+               build_localizing_block(y, powers, basis_local, 3);
+        % Block 3: a^2*m2 - m4
+        blk3 = a^2 * build_localizing_block(y, powers, basis_local, 2) - ...
+               build_localizing_block(y, powers, basis_local, 4);
+           
+        M_loc_g = [blk1, blk2; blk2', blk3];
+        M_loc_g == semidefinite(2 * dim_local);
 
-        0 <= tau <= tauub;
-
-        % truncated moment feasibility on [-a,a]
-        M2 >= 0;
-        M1 >= 0;
-
-        % information matrix positivity
-        Jbar - epsJ*eye(2) >= 0;
-
-        % Schur complement constraint for inverse bound
-        [Jbar, eye(2); eye(2), W] >= 0;
-
-        % PSD of W (redundant but helps)
-        W >= 0;
-
-        % epigraph for trace inverse
-        tau >= trace(W);
+        % 4. PMI Constraint (The FIM constraint) (Source 369)
+        % [ J(m) - epsilon*I, I2 ]
+        % [ I2,               W  ]  >= 0
+        % J(m) is quadratic. W is linear.
+        epsilon = 1e-4;
+        
+        % Define J components expressions (Linear combination of moments)
+        % We need to form the Localizing Matrix for this 4x4 PMI
+        % Blocks (1,1)..(2,2) are J(m). Blocks (3,3)..(4,4) are W.
+        
+        % Helper to get moment expression for J_uu, J_rr, J_ur
+        % J_uu = m2 + (2u/r)m3 + (u^2/r^2)m4 + m1^2 + (2u/r)m1m2 + (u^2/r^2)m2^2
+        coef_1 = 1; coef_2 = 2*u/r; coef_3 = u^2/r^2;
+        % Terms: m2, m3, m4 (Linear)
+        L_Juu_lin = build_localizing_block(y, powers, basis_local, 2) + ...
+                    coef_2 * build_localizing_block(y, powers, basis_local, 3) + ...
+                    coef_3 * build_localizing_block(y, powers, basis_local, 4);
+        % Terms: m1^2, m1m2, m2^2 (Quadratic)
+        % We need a generalized builder for products like m_i * m_j
+        L_m1m1 = build_localizing_block_prod(y, powers, basis_local, 1, 1);
+        L_m1m2 = build_localizing_block_prod(y, powers, basis_local, 1, 2);
+        L_m2m2 = build_localizing_block_prod(y, powers, basis_local, 2, 2);
+        L_Juu_quad = L_m1m1 + coef_2 * L_m1m2 + coef_3 * L_m2m2;
+        
+        L_Juu = L_Juu_lin + L_Juu_quad - epsilon * eye(dim_local); % Minus epsilon
+        
+        % J_rr = C_rr * (m4 + m2^2)
+        C_rr = (1-u^2)^2 / (4*r^4);
+        L_Jrr = C_rr * (build_localizing_block(y, powers, basis_local, 4) + ...
+                        build_localizing_block_prod(y, powers, basis_local, 2, 2)) - epsilon * eye(dim_local);
+                    
+        % J_ur = C_ur * (m3 + (u/r)m4 + m1m2 + (u/r)m2^2)
+        C_ur = (1-u^2) / (2*r^2);
+        term_m3 = build_localizing_block(y, powers, basis_local, 3);
+        term_m4 = (u/r) * build_localizing_block(y, powers, basis_local, 4);
+        term_m1m2 = build_localizing_block_prod(y, powers, basis_local, 1, 2);
+        term_m2m2 = (u/r) * build_localizing_block_prod(y, powers, basis_local, 2, 2);
+        L_Jur = C_ur * (term_m3 + term_m4 + term_m1m2 + term_m2m2);
+        
+        % W blocks (Variables 5,6,7 correspond to W11, W12, W22)
+        L_W11 = build_localizing_block_var(y, powers, basis_local, 5);
+        L_W12 = build_localizing_block_var(y, powers, basis_local, 6);
+        L_W22 = build_localizing_block_var(y, powers, basis_local, 7);
+        
+        % Identity blocks
+        L_I = build_localizing_block(y, powers, basis_local, 0); % Just the basis mass
+        
+        % PMI Matrix Construction
+        % [L_Juu, L_Jur, L_I,   0  ]
+        % [L_Jur, L_Jrr, 0,     L_I]
+        % [L_I,   0,     L_W11, L_W12]
+        % [0,     L_I,   L_W12, L_W22]
+        
+        Z_blk = zeros(dim_local);
+        PMI_Mat = [L_Juu, L_Jur, L_I,   Z_blk;
+                   L_Jur, L_Jrr, Z_blk, L_I;
+                   L_I,   Z_blk, L_W11, L_W12;
+                   Z_blk, L_I,   L_W12, L_W22];
+               
+        PMI_Mat == semidefinite(4 * dim_local);
+        
+        % 5. Trace Constraint: tr(W) <= tau => tau - W11 - W22 >= 0
+        % Localizing matrix for linear polynomial (tau - W11 - W22)
+        L_tau = build_localizing_block_var(y, powers, basis_local, 8);
+        L_trW = L_W11 + L_W22;
+        L_trace_slack = L_tau - L_trW;
+        L_trace_slack == semidefinite(dim_local);
+        
 cvx_end
 
-info.cvx_status = cvx_status;
-info.cvx_optval = cvx_optval;
+fprintf('Stage I Status: %s\n', cvx_status);
+fprintf('Optimal tau: %.4f\n', cvx_optval);
 
-if ~strcmpi(cvx_status,'Solved') && ~strcmpi(cvx_status,'Inaccurate/Solved')
-    error('Stage I failed: %s', cvx_status);
+% Extract Optimal Moments m* = [1, m1, m2, m3, m4]
+% These are the first-order moments of the measure y corresponding to vars 1..4
+m_star = zeros(5,1);
+m_star(1) = 1;
+for k = 1:4
+    % Find index of monomial x_k^1
+    p_t = zeros(1, n_xi); p_t(k) = 1;
+    [~, idx] = ismember(p_t, powers, 'rows');
+    m_star(k+1) = y(idx);
 end
+fprintf('Optimal Moments m*: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', m_star);
 
-mstar    = [1, m1, m2, m3, m4];
-tau_star = tau;
-Wstar    = W;
+%% 3. STAGE II: Atomic Extraction (Flat Extension)
+fprintf('\n--- Stage II: Atomic Extraction ---\n');
+
+% Target Order for extraction (usually N for N antennas)
+K_ext = N; 
+% We solve A-TKMP to find a flat extension z of m_star up to order 2*K_ext
+% However, typically for N antennas, we need rank N.
+% We try to extend moments to order 2*N.
+
+deg_ext = 2 * K_ext;
+powers_ext = (0:deg_ext)'; % 1D monomials powers for z
+n_z = length(powers_ext);
+
+cvx_begin sdp quiet
+    variable z(n_z)
+    
+    % Objective: Random or simple trace minimization to promote low rank
+    minimize(0) 
+    
+    subject to
+        % Consistency with Stage I output
+        z(1:5) == m_star;
+        
+        % Hankel Matrix M_K(z) >= 0
+        H_z = hankel_matrix(z, K_ext);
+        H_z == semidefinite(K_ext + 1);
+        
+        % Localizing Matrix for [-a, a]: M_{K-1}(g*z) >= 0
+        % g(t) = a^2 - t^2
+        % Construct B1 = a^2 * M_{K-1}(z) - M_{K-1}(shift(z,2))
+        H_z_sub = hankel_matrix(z(1:end-2), K_ext-1); % M_{K-1}
+        H_z_shift = hankel_matrix(z(3:end), K_ext-1); % Shift by t^2
+        
+        (a^2 * H_z_sub - H_z_shift) == semidefinite(K_ext);
+cvx_end
+
+fprintf('Stage II Status: %s\n', cvx_status);
+
+% 4. Extraction via Vandermonde / Prony's Method
+% Construct Hankel Matrix
+H = double(hankel_matrix(z, K_ext));
+
+% Check Singular Values to determine rank
+sv = svd(H);
+fprintf('Singular values of Hankel Matrix: \n');
+disp(sv(1:min(10, length(sv)))');
+
+% Assuming rank r = N (since we designed for N antennas)
+r_rank = N; 
+
+% Extraction using ESPRIT-like shift invariance
+% H0 = rows 1 to end-1; H1 = rows 2 to end
+H0 = H(1:end-1, 1:r_rank);
+H1 = H(2:end,   1:r_rank);
+
+% Compute atoms (roots)
+atoms_norm = eig(pinv(H0) * H1);
+% Filter atoms to be real and within range (numerical artifacts possible)
+atoms = real(atoms_norm);
+atoms = atoms(abs(atoms) <= a + 1e-3); % Tolerance
+
+% Sort atoms
+atoms = sort(atoms);
+
+% Solve for weights
+% Vandermonde system: V * w = m_star
+V = zeros(length(m_star), length(atoms));
+for i = 1:length(m_star)
+    V(i,:) = atoms'.^(i-1);
 end
+weights = lsqnonneg(V, m_star);
 
-%% =====================================================================
-%% =============================== Stage II =============================
-%% =====================================================================
-function [zstar, k_used, r, info] = stage2_ATKMP_flat_extension_cvx(mstar, a, kmax, cvx_solver_name, verbose)
-% Solve SDR_k (k=2..kmax) until flatness rank(Mk)=rank(Mk-1) holds.
-% z = [z0..z_{2k}], constraints:
-%   z0..z4 = m0..m4
-%   Mk(z) >= 0
-%   M_{k-1}(g z) >= 0, g(t)=a^2 - t^2
-% objective: random linear <R,z> (for generic extreme point)
+% Display Result
+fprintf('\n--- Design Result ---\n');
+fprintf('Recovered %d atoms (Antenna Locations):\n', length(atoms));
+disp(atoms');
+fprintf('Weights:\n');
+disp(weights');
 
-cvx_stat_last = 'NotStarted';
-m0to4 = mstar(:);
+%% 4. VISUALIZATION
+figure('Name', 'Antenna Layout');
+stem(atoms, weights, 'filled', 'LineWidth', 2, 'MarkerSize', 8);
+xlabel('Position (Normalized \lambda)');
+ylabel('Weight / Power');
+title(sprintf('Optimized Array Configuration (N=%d, Lasserre d=%d)', length(atoms), deg_relaxation));
+grid on;
+xlim([-a-1, a+1]);
+xline([-a, a], 'r--', {'Aperture Limit'}, 'LabelVerticalAlignment', 'bottom');
 
-for k=2:kmax
-    cvx_clear;
+% ---------------------------------------------------------
+% AUXILIARY FUNCTIONS
+% ---------------------------------------------------------
 
-    zlen = 2*k+1;
-    R = randn(zlen,1);
-
-    cvx_begin sdp
-        if verbose==0, cvx_quiet(true); end
-        cvx_solver(cvx_solver_name);
-
-        variable z(zlen,1)
-
-        minimize( R.'*z )
-
-        subject to
-            z(1:5) == m0to4;   % fix z0..z4
-
-            Mk   = moment_matrix_1d_expr(z, k);
-            Mloc = localizing_matrix_1d_expr(z, k-1, a);
-
-            Mk   >= 0;
-            Mloc >= 0;
-    cvx_end
-
-    cvx_stat_last = cvx_status;
-    if ~strcmpi(cvx_status,'Solved') && ~strcmpi(cvx_status,'Inaccurate/Solved')
-        continue;
+function powers = generate_monomial_powers(n_vars, degree)
+    % Recursively generate all monomial power vectors for n_vars up to degree
+    % This is a simple implementation for small n_vars/degree
+    if n_vars == 1
+        powers = (0:degree)';
+    else
+        sub_powers = generate_monomial_powers(n_vars-1, degree);
+        powers = [];
+        for k = 0:degree
+            % Prepend power k for current variable
+            % Filter sum of degrees <= degree
+            valid_idx = sum(sub_powers, 2) <= (degree - k);
+            if any(valid_idx)
+                new_rows = [repmat(k, sum(valid_idx), 1), sub_powers(valid_idx, :)];
+                powers = [powers; new_rows];
+            end
+        end
     end
+    % Sort by degree for consistency (optional)
+    [~, idx] = sort(sum(powers, 2));
+    powers = powers(idx, :);
+end
 
-    Mk_num  = moment_matrix_1d_numeric(z, k);
-    Mk1_num = moment_matrix_1d_numeric(z, k-1);
-
-    rk  = numeric_rank(Mk_num, 1e-8);
-    rk1 = numeric_rank(Mk1_num, 1e-8);
-
-    if rk == rk1
-        zstar = z(:).';
-        k_used = k;
-        r = rk;
-        info.cvx_status = cvx_status;
-        info.k_used = k_used;
-        info.rank = r;
-        return;
+function [indices, dim] = build_moment_matrix_idx(powers, d)
+    % Build indices for Moment Matrix M_d(y)
+    % Matrix size is N_d x N_d where N_d is number of monomials of degree <= d
+    
+    % Identify basis monomials (deg <= d)
+    deg_basis = sum(powers, 2);
+    basis_idx = find(deg_basis <= d);
+    dim = length(basis_idx);
+    basis_powers = powers(basis_idx, :);
+    
+    indices = zeros(dim, dim);
+    for i = 1:dim
+        for j = 1:dim
+            % The moment corresponding to basis_i * basis_j has powers p_i + p_j
+            p_sum = basis_powers(i,:) + basis_powers(j,:);
+            [~, loc] = ismember(p_sum, powers, 'rows');
+            indices(i,j) = loc;
+        end
     end
 end
 
-error('Stage II failed: no k in [2,%d] achieved flatness. Last CVX status: %s', kmax, cvx_stat_last);
+function [basis_idx, dim] = get_basis_indices(powers, d)
+    basis_idx = find(sum(powers, 2) <= d);
+    dim = length(basis_idx);
 end
 
-function Mk = moment_matrix_1d_expr(z,k)
-Mk = cvx( zeros(k+1,k+1) );
-for i=0:k
-    for j=0:k
-        Mk(i+1,j+1) = z(i+j+1);
+function blk = build_localizing_block(y, powers, basis_idx, m_deg)
+    % Construct a localizing matrix block corresponding to multiplying by m_{m_deg}
+    % m_deg: which m variable (1=m1, 2=m2...) or 0 for constant.
+    % Note: In 'powers', variables 1..4 are m1..m4.
+    
+    dim = length(basis_idx);
+    basis_powers = powers(basis_idx, :);
+    blk = cvx(zeros(dim, dim));
+    
+    % Power vector for the shift variable m_{m_deg}
+    p_shift = zeros(1, size(powers,2));
+    if m_deg > 0
+        p_shift(m_deg) = 1; % Assume m1 is var 1, etc.
+    end
+    
+    for i = 1:dim
+        for j = 1:dim
+            p_total = basis_powers(i,:) + basis_powers(j,:) + p_shift;
+            [found, loc] = ismember(p_total, powers, 'rows');
+            if found
+                blk(i,j) = y(loc);
+            else
+                % This should not happen if y covers enough degrees
+                error('Moment degree exceeded bounds.');
+            end
+        end
     end
 end
-Mk = (Mk+Mk')/2;
-end
 
-function Mloc = localizing_matrix_1d_expr(z,k,a)
-% g(t)=a^2 - t^2: entry = a^2 z_{i+j} - z_{i+j+2}
-Mloc = cvx( zeros(k+1,k+1) );
-for i=0:k
-    for j=0:k
-        Mloc(i+1,j+1) = a^2*z(i+j+1) - z(i+j+3);
+function blk = build_localizing_block_prod(y, powers, basis_idx, var1, var2)
+    % For quadratic terms m_i * m_j
+    dim = length(basis_idx);
+    basis_powers = powers(basis_idx, :);
+    blk = cvx(zeros(dim, dim));
+    
+    p_shift = zeros(1, size(powers,2));
+    p_shift(var1) = p_shift(var1) + 1;
+    p_shift(var2) = p_shift(var2) + 1;
+    
+    for i = 1:dim
+        for j = 1:dim
+            p_total = basis_powers(i,:) + basis_powers(j,:) + p_shift;
+            [found, loc] = ismember(p_total, powers, 'rows');
+            if found
+                blk(i,j) = y(loc);
+            end
+        end
     end
 end
-Mloc = (Mloc+Mloc')/2;
-end
 
-function Mk = moment_matrix_1d_numeric(z,k)
-Mk = zeros(k+1,k+1);
-for i=0:k
-    for j=0:k
-        Mk(i+1,j+1) = z(i+j+1);
+function blk = build_localizing_block_var(y, powers, basis_idx, var_idx)
+    % Generic wrapper for single variable shift
+    % var_idx is the index in the 'powers' columns (e.g. 5 for W11)
+    blk = build_localizing_block(y, powers, basis_idx, 0); % Just dummy call logic
+    % Re-implement cleanly:
+    dim = length(basis_idx);
+    basis_powers = powers(basis_idx, :);
+    p_shift = zeros(1, size(powers,2));
+    p_shift(var_idx) = 1;
+    
+    for i = 1:dim
+        for j = 1:dim
+            p_total = basis_powers(i,:) + basis_powers(j,:) + p_shift;
+            [~, loc] = ismember(p_total, powers, 'rows');
+            blk(i,j) = y(loc);
+        end
     end
 end
-Mk = (Mk+Mk')/2;
-end
 
-%% =====================================================================
-%% =========================== Extraction (1D) ===========================
-%% =====================================================================
-function [t_atoms, w_atoms] = extract_atoms_1d_from_z(zstar, mstar, a, r)
-% 1D extraction via Hankel recurrence:
-% z_{i+r} = sum_{j=0}^{r-1} c_j z_{i+j}, i=0..r-1
-H = zeros(r,r);
-b = zeros(r,1);
-for i=0:r-1
-    for j=0:r-1
-        H(i+1,j+1) = zstar(i+j+1);
+function H = hankel_matrix(z, K)
+    % Standard 1D Hankel Matrix construction from moment vector z
+    % z = [m0, m1, ..., m_2K]
+    H = cvx(zeros(K+1, K+1));
+    for i = 1:K+1
+        for j = 1:K+1
+            % Element (i,j) corresponds to m_{i+j-2} (0-based index)
+            % MATLAB index of z is power + 1
+            power = (i-1) + (j-1);
+            H(i,j) = z(power + 1);
+        end
     end
-    b(i+1) = zstar(i+r+1);
-end
-c = H\b;
-
-% polynomial p(t)=t^r - sum c_j t^j
-pcoef = [1, -flipud(c(:)).'];  % descending
-rt = roots(pcoef);
-
-tol_im = 1e-7;
-real_roots = rt(abs(imag(rt))<tol_im);
-t_atoms = real(real_roots);
-t_atoms = t_atoms(t_atoms >= -a-1e-8 & t_atoms <= a+1e-8);
-
-if numel(t_atoms) < r
-    [~,ord] = sort(abs(imag(rt)), 'ascend');
-    t_atoms = real(rt(ord(1:r)));
-end
-t_atoms = sort(t_atoms(:));
-
-% weights from first r moments m0..m_{r-1}
-m_needed = mstar(1:r).';
-V = zeros(r,r);
-for ell=0:r-1
-    V(ell+1,:) = (t_atoms.').^ell;
-end
-w_atoms = V \ m_needed;
-
-w_atoms = max(w_atoms,0);
-s = sum(w_atoms);
-if s <= 0
-    w_atoms = ones(r,1)/r;
-else
-    w_atoms = w_atoms/s;
-end
-end
-
-function x = discretize_atoms_to_N(t_atoms, w_atoms, N)
-r = numel(t_atoms);
-raw = w_atoms(:)*N;
-cnt = floor(raw);
-rem = N - sum(cnt);
-[~,ord] = sort(raw - cnt, 'descend');
-for i=1:rem
-    cnt(ord(i)) = cnt(ord(i)) + 1;
-end
-x = [];
-for i=1:r
-    x = [x; repmat(t_atoms(i), cnt(i), 1)];
-end
-x = x(1:min(N,numel(x)));
-if numel(x) < N
-    x = [x; repmat(t_atoms(1), N-numel(x), 1)];
-end
-x = sort(x);
-end
-
-%% =====================================================================
-%% ============================== Utilities =============================
-%% =====================================================================
-function m = moments_from_x(x)
-x = x(:);
-m = [1, mean(x), mean(x.^2), mean(x.^3), mean(x.^4)];
-end
-
-function Jbar = Jbar_from_m(m,u,r)
-m1=m(2); m2=m(3); m3=m(4); m4=m(5);
-Juu = m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2;
-Jrr = ((1-u^2)^2/(4*r^4))*(m4 + m2^2);
-Jur = ((1-u^2)/(2*r^2))*( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
-Jbar = [Juu, Jur; Jur, Jrr];
-end
-
-function rnk = numeric_rank(A, tol)
-s = svd((A+A')/2);
-rnk = sum(s > tol);
-end
-
-function plot_design(figId, a, x_design, t_atoms, w_atoms, u, r, tau_star, tau_design)
-figure(figId); clf;
-
-subplot(2,1,1);
-stem(t_atoms, w_atoms, 'filled'); grid on;
-xlim([-a a]);
-xlabel('Atom location t_i'); ylabel('Weight w_i');
-title(sprintf('Atoms (u=%.2f, r=%.2f)', u, r));
-
-subplot(2,1,2);
-scatter(x_design, zeros(size(x_design)), 25, 'filled'); grid on;
-xlim([-a a]); ylim([-0.5 0.5]);
-yticks([]); xlabel('Antenna position x_n');
-title(sprintf('Discretized array (N=%d): tau*=%.3e, tau(des)=%.3e', ...
-    numel(x_design), tau_star, tau_design));
-end
-
-function check_feasible_point_ULA(u,r,a,epsJ,tauub,N)
-x = linspace(-a,a,N).';
-m = [1, mean(x), mean(x.^2), mean(x.^3), mean(x.^4)];
-J = Jbar_from_m(m,u,r);
-W = inv(J);
-tau = trace(W);
-
-M2 = [1 m(2) m(3);
-      m(2) m(3) m(4);
-      m(3) m(4) m(5)];
-
-M1 = [a^2*1 - m(3),  a^2*m(2) - m(4);
-      a^2*m(2) - m(4), a^2*m(3) - m(5)];
-
-Jeps = J - epsJ*eye(2);
-Blk  = [J eye(2); eye(2) W];
-
-fprintf('\n[Feasibility check @ ULA point]\n');
-fprintf('min eig(M2)    = %.3e\n', min(eig((M2+M2')/2)));
-fprintf('min eig(M1)    = %.3e\n', min(eig((M1+M1')/2)));
-fprintf('min eig(J-epsI)= %.3e\n', min(eig((Jeps+Jeps')/2)));
-fprintf('min eig(Block) = %.3e\n', min(eig((Blk+Blk')/2)));
-fprintf('tau            = %.6e\n', tau);
-fprintf('tauub-tau      = %.6e\n', tauub - tau);
-fprintf('tau-tr(W)      = %.6e\n', tau - trace(W));
 end
