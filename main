@@ -1,10 +1,10 @@
-%% Monostatic Sensing Array Design: Two-Stage Algorithm (Robust Fixed)
-% 1. Stage I: Lasserre Hierarchy (Softened Constraints)
-% 2. Stage II: Flat Extension (Soft Matching) to prevent infeasibility
+%% Monostatic Sensing Array Design: Two-Stage Algorithm (Final Robust Fix)
+% 1. Stage I: Lasserre Hierarchy (Softened Constraints) / SCA Fallback
+% 2. Stage II: Flat Extension (Soft Matching) with Numeric Safe Extraction
 % 3. Visualization
 
 clear; clc; close all;
-cvx_clear; 
+cvx_clear; % 清除可能残留的 CVX 状态
 
 %% 1. SYSTEM PARAMETERS
 fprintf('--- Setting up System Parameters ---\n');
@@ -31,8 +31,11 @@ n_y = size(powers, 1);
 idx_const = 1; 
 idx_tau = find_power_index(powers, [0 0 0 0 0 0 0 1]);
 
-% Solver: SeDuMi is best for moments, SDPT3 is okay.
-% cvx_solver sedumi 
+% CVX Solver Settings
+% cvx_solver sedumi % Uncomment if SeDuMi is installed
+% cvx_solver sdpt3 
+
+tm_star = []; % Initialize
 
 try
     cvx_begin sdp
@@ -43,44 +46,35 @@ try
         M_d = y(Md_idx);
         
         % Objective: Minimize tau + Regularization
-        % Increased regularization slightly to enforce boundedness
-        minimize( y(idx_tau) + 1e-3 * trace(M_d) )
+        minimize( y(idx_tau) + 1e-4 * trace(M_d) )
         
         subject to
-            % 1. Unit Mass
             y(idx_const) == 1;
-            
-            % 2. Moment Matrix PSD
             M_d == semidefinite(dim_Md);
-            
-            % 3. Bounds (Relaxed)
             y(idx_tau) >= 0;
             
-            % 4. Expected Moments E[m] constraints
-            % Extract symbolic expressions for E[m_k]
+            % Expected Moments E[m]
             expected_m = cvx(zeros(5,1));
             expected_m(1) = 1; 
             for k=1:4
-                % map to variable index k (1-based in powers is column k)
                 p_vec = zeros(1, n_xi); p_vec(k) = 1;
                 [~, idx] = ismember(p_vec, powers, 'rows');
                 expected_m(k+1) = y(idx);
             end
             
-            % Hankel Constraints on Expected Moments
-            H_m = hankel_matrix_var(expected_m, 2);
+            % Hankel Constraints
+            H_m = hankel_matrix_cvx(expected_m, 2); % Use CVX version here
             H_m == semidefinite(3);
             
-            % Localizing on [-1, 1]
-            H_sub = hankel_matrix_var(expected_m(1:end-2), 1);
-            H_shf = hankel_matrix_var(expected_m(3:end), 1);
+            H_sub = hankel_matrix_cvx(expected_m(1:end-2), 1);
+            H_shf = hankel_matrix_cvx(expected_m(3:end), 1);
             (H_sub - H_shf) == semidefinite(2);
             
-            % 5. PMI Constraint (Fisher Information)
+            % PMI Constraint
             [basis_local, dim_local] = get_basis_indices(powers, deg_relaxation - 1);
-            epsilon = 1e-5; % Relaxed epsilon
+            epsilon = 1e-5; 
             
-            % -- Construct PMI Blocks --
+            % J_uu parts
             c2 = scale_fac^2; c3 = (2*u/r)*scale_fac^3; c4 = (u^2/r^2)*scale_fac^4;
             L_Juu_lin = c2*blk_var(y,powers,basis_local,2) + c3*blk_var(y,powers,basis_local,3) + c4*blk_var(y,powers,basis_local,4);
             
@@ -91,9 +85,11 @@ try
             L_Juu_quad = q11*L_m1m1 + q12*L_m1m2 + q22*L_m2m2;
             L_Juu = L_Juu_lin + L_Juu_quad - epsilon*eye(dim_local);
             
+            % J_rr parts
             C_rr = (1-u^2)^2 / (4*r^4);
             L_Jrr = C_rr*scale_fac^4 * (blk_var(y,powers,basis_local,4) + L_m2m2) - epsilon*eye(dim_local);
             
+            % J_ur parts
             C_ur = (1-u^2) / (2*r^2);
             L_Jur = C_ur * (scale_fac^3*blk_var(y,powers,basis_local,3) + (u/r)*scale_fac^4*blk_var(y,powers,basis_local,4) + ...
                             scale_fac^3*L_m1m2 + (u/r)*scale_fac^4*L_m2m2);
@@ -113,64 +109,68 @@ try
     
     if contains(cvx_status, 'Solved') || contains(cvx_status, 'Inaccurate')
         fprintf('Stage I Converged. tau: %.4f\n', cvx_optval);
-        tm_star = double(expected_m); % Explicit double conversion here
+        tm_star = double(expected_m); 
     else
-        error('Solver returned status: %s', cvx_status);
+        error('Solver status: %s', cvx_status);
     end
 
 catch ME
     fprintf('\n!!! Stage I Warning: %s !!!\n', ME.message);
     fprintf('Switching to Fallback: Uniform Initialization\n');
-    % Fallback: uniform distribution moments
     m_fall = zeros(5,1); m_fall(1)=1;
-    t_uni = linspace(-1,1,N_ant)';
+    t_uni = linspace(-0.9,0.9,N_ant)'; % Uniform on normalized domain
     for k=1:4, m_fall(k+1) = mean(t_uni.^k); end
     tm_star = m_fall;
 end
 
 fprintf('Target Normalized Moments: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', tm_star);
 
-%% 3. STAGE II: Atomic Extraction (Soft Matching)
-fprintf('\n--- Stage II: Atomic Extraction (Robust) ---\n');
+%% 3. STAGE II: Atomic Extraction (Robust)
+fprintf('\n--- Stage II: Atomic Extraction (Numeric Safe) ---\n');
 
-% We need to find a valid measure 'z' that is CLOSE to 'tm_star'.
-% Using hard equality z(1:5) == tm_star often causes infeasibility due to numeric noise.
 K_ext = N_ant; 
 n_z = 2*K_ext + 1;
 
+% Soft Matching Optimization
 cvx_begin sdp quiet
     variable z(n_z)
-    % Objective: Minimize distance to target moments + trace regularization (low rank)
-    minimize( 100 * norm(z(1:5) - tm_star) + 1e-2 * z(1) ) 
+    % Minimize distance + trace regularization
+    minimize( 100 * norm(z(1:5) - tm_star) + 1e-3 * z(1) ) 
     
     subject to
-        % Base validity
-        z(1) >= 0.99; % Mass approx 1
+        z(1) >= 0.99; 
         
-        % Hankel PSD (Valid Moment Sequence)
-        H = hankel_matrix_var(z, K_ext);
+        H = hankel_matrix_cvx(z, K_ext); % Use CVX wrapper inside CVX block
         H == semidefinite(K_ext+1);
         
-        % Localizing [-1, 1]
-        H_sub = hankel_matrix_var(z(1:end-2), K_ext-1);
-        H_shf = hankel_matrix_var(z(3:end), K_ext-1);
+        H_sub = hankel_matrix_cvx(z(1:end-2), K_ext-1);
+        H_shf = hankel_matrix_cvx(z(3:end), K_ext-1);
         (H_sub - H_shf) == semidefinite(K_ext);
 cvx_end
 
-% Robust Check before Conversion
+% --- CRITICAL FIX: Explicit Numeric Conversion ---
 if ~contains(cvx_status, 'Solved') && ~contains(cvx_status, 'Inaccurate')
-    fprintf('Stage II Optimization Failed (Status: %s). Using fallback layout.\n', cvx_status);
+    fprintf('Stage II Failed (%s). Using fallback layout.\n', cvx_status);
     atoms_phys = linspace(-a, a, N_ant)';
     weights = ones(N_ant, 1)/N_ant;
 else
     fprintf('Stage II Converged. Extracting atoms...\n');
-    % Convert to double ONLY now
-    H_val = double(hankel_matrix_var(z, K_ext));
     
-    % Extraction (ESPRIT / Vandermonde)
+    % Force conversion to double vector FIRST
+    z_val = double(z);
+    
+    % Build Hankel Matrix using PURE NUMERIC method (No CVX object)
+    H_val = zeros(K_ext+1);
+    for i = 1:K_ext+1
+        for j = 1:K_ext+1
+            H_val(i,j) = z_val(i+j-1);
+        end
+    end
+    
+    % Extraction (Vandermonde / ESPRIT)
     r_rank = N_ant; 
     try
-        % Stabilize Hankel: Use SVD to enforce rank N
+        % SVD Denoising
         [U, S, V] = svd(H_val);
         H_clean = U(:,1:r_rank) * S(1:r_rank,1:r_rank) * V(:,1:r_rank)';
         
@@ -179,19 +179,19 @@ else
         
         atoms_norm = eig(pinv(H0) * H1);
         atoms_norm = real(atoms_norm);
-        atoms_norm = atoms_norm(abs(atoms_norm) <= 1.01); % Filter valid
+        atoms_norm = atoms_norm(abs(atoms_norm) <= 1.05); % Bounds check
         atoms_norm = sort(atoms_norm);
         
-        % If fewer atoms found, pad with uniform
+        % Fill missing atoms if rank deficient
         if length(atoms_norm) < N_ant
-            fprintf('Warning: Only %d atoms valid. Filling rest.\n', length(atoms_norm));
-            atoms_norm = [atoms_norm; linspace(-0.9, 0.9, N_ant - length(atoms_norm))'];
+            n_miss = N_ant - length(atoms_norm);
+            atoms_norm = [atoms_norm; linspace(-0.8, 0.8, n_miss)'];
             atoms_norm = sort(atoms_norm);
         end
         
         atoms_phys = atoms_norm * scale_fac;
         
-        % Weights
+        % Weights Recovery
         m_phys = zeros(5,1);
         for k=0:4, m_phys(k+1) = tm_star(k+1) * scale_fac^k; end
         
@@ -207,19 +207,31 @@ else
 end
 
 %% 4. VISUALIZATION
-figure('Name', 'Optimized Array');
-stem(atoms_phys, weights, 'filled', 'LineWidth', 2, 'Color', 'b');
-hold on;
-% Plot Uniform for Comparison
-stem(linspace(-a,a,N_ant), 0.5*ones(N_ant,1)/N_ant, 'r--', 'Marker', 'none');
-legend('Optimized (Lasserre)', 'Uniform (Ref)');
-title(sprintf('Array Layout (N=%d, \theta=%.1f\circ)', N_ant, theta_deg));
-xlabel('Position (\lambda)'); ylabel('Excitation Weight');
-grid on; xlim([-a-1, a+1]);
-xline([-a, a], 'k:', 'Aperture');
+if ~isempty(atoms_phys)
+    figure('Name', 'Optimized Array');
+    stem(atoms_phys, weights, 'filled', 'LineWidth', 2, 'Color', 'b');
+    hold on;
+    % Plot Uniform for Comparison
+    stem(linspace(-a,a,N_ant), mean(weights)*ones(N_ant,1), 'r--', 'Marker', 'none');
+    legend('Optimized (Lasserre)', 'Uniform (Ref)');
+    title(sprintf('Array Layout (N=%d, \\theta=%.1f\\circ)', N_ant, theta_deg));
+    xlabel('Position (\lambda)'); ylabel('Excitation Weight');
+    grid on; xlim([-a-1, a+1]);
+    xline([-a, a], 'k:', 'Aperture');
+end
 
+%% --- AUX FUNCTIONS (Corrected) ---
 
-%% --- AUX FUNCTIONS (Keep these unchanged) ---
+% Special CVX-safe Hankel builder for usage INSIDE cvx_begin
+function H = hankel_matrix_cvx(z, K)
+    H = cvx(zeros(K+1)); % Explicitly creating CVX object
+    for i=1:K+1
+        for j=1:K+1
+            H(i,j) = z(i+j-1);
+        end
+    end
+end
+
 function powers = generate_monomial_powers(n, d)
     if n==1, powers=(0:d)'; return; end
     sub = generate_monomial_powers(n-1, d);
@@ -277,15 +289,6 @@ function blk = blk_prod(y, powers, basis, v1, v2)
             p_tot = powers(basis(i),:) + powers(basis(j),:) + p_shift;
             [~, loc] = ismember(p_tot, powers, 'rows');
             blk(i,j) = y(loc);
-        end
-    end
-end
-
-function H = hankel_matrix_var(z, K)
-    H = cvx(zeros(K+1));
-    for i=1:K+1
-        for j=1:K+1
-            H(i,j) = z(i+j-1);
         end
     end
 end
