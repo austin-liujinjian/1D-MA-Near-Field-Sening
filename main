@@ -1,5 +1,347 @@
+%% two_stage_all_cvx.m
+% Full CVX(SDPT3) two-stage pipeline, no YALMIP, no MOSEK.
+% Stage I  (SDP in m,W,tau): equivalent to 1D degree-4 Lasserre(d=2) relaxation
+% Stage II (A-TKMP SDR_k): flat extension + extraction
+%
+% Requirements: CVX installed + cvx_setup done. Use SDPT3 backend.
+
+clear; clc; close all;
+
+%% ----------------- Basic parameters -----------------
+N    = 25;          % desired number of antennas (after discretization)
+D    = 0.50;        % aperture length
+a    = D/2;         % support [-a,a]
+epsJ = 1e-6;        % Jbar >= epsJ * I
+kmax = 6;           % Stage II: try k=2..kmax
+
+cvx_solver_name = 'sdpt3';
+verbose = 1;
+
+UR_list = [0.2 2.5];   % you can add more rows: [u r; u r; ...]
+
+rng(1);
+
+for tcase = 1:size(UR_list,1)
+    u = UR_list(tcase,1);
+    r = UR_list(tcase,2);
+
+    fprintf('\n==============================\n');
+    fprintf('Target (u,r) = (%.4f, %.4f)\n', u, r);
+
+    %% tau upper bound from a feasible ULA
+    x_ula = linspace(-a,a,N).';
+    m_ula = moments_from_x(x_ula);
+    tau_ula = trace(inv(Jbar_from_m(m_ula,u,r)));
+    tauub   = 1.2 * tau_ula;
+    fprintf('tau_ub (from ULA) = %.6e\n', tauub);
+
+    %% Optional: feasibility sanity check at ULA point (for your own debugging)
+    check_feasible_point_ULA(u,r,a,epsJ,tauub,N);
+
+    %% ----------------- Stage I (CVX SDP, stable) -----------------
+    [mstar, tau_star, Wstar, info1] = stage1_sdp_m_cvx(u,r,a,epsJ,tauub,cvx_solver_name,verbose);
+    fprintf('\nStage I done: status=%s, tau_star=%.6e\n', info1.cvx_status, tau_star);
+    fprintf('m*=[m0..m4]=[%.4e %.4e %.4e %.4e %.4e]\n', mstar);
+
+    %% ----------------- Stage II (CVX A-TKMP flat extension) -----------------
+    [zstar, k_used, flat_rank, info2] = stage2_ATKMP_flat_extension_cvx(mstar, a, kmax, cvx_solver_name, verbose);
+    fprintf('\nStage II done: status=%s, k_used=%d, rank=%d\n', info2.cvx_status, k_used, flat_rank);
+
+    %% ----------------- Extraction (atoms) -----------------
+    [t_atoms, w_atoms] = extract_atoms_1d_from_z(zstar, mstar, a, flat_rank);
+    fprintf('\nExtracted atoms (ti, wi):\n');
+    disp([t_atoms(:), w_atoms(:)]);
+
+    %% ----------------- Discretize to N antennas -----------------
+    x_design = discretize_atoms_to_N(t_atoms, w_atoms, N);
+
+    %% ----------------- Evaluate objective -----------------
+    m_design   = moments_from_x(x_design);
+    tau_design = trace(inv(Jbar_from_m(m_design,u,r)));
+    fprintf('Objective check: tau(design)=%.6e\n', tau_design);
+
+    %% ----------------- Plot -----------------
+    plot_design(100+tcase, a, x_design, t_atoms, w_atoms, u, r, tau_star, tau_design);
+end
+
+%% =====================================================================
+%% =============================== Stage I ==============================
+%% =====================================================================
+function [mstar, tau_star, Wstar, info] = stage1_sdp_m_cvx(u,r,a,epsJ,tauub,cvx_solver_name,verbose)
+% Stable CVX Stage I:
+% decision variables: m1..m4, W (2x2), tau
+% constraints:
+%   M2(m) >= 0, M1(m) >= 0   (1D degree-4 truncated moment feasibility on [-a,a])
+%   Jbar(m) >= epsJ*I
+%   [Jbar  I; I  W] >= 0     (Schur: W >= Jbar^{-1})
+%   W >= 0
+%   tau >= trace(W), 0 <= tau <= tauub
+% plus moment bounds (redundant but stabilizing): |m1|<=a, 0<=m2<=a^2, |m3|<=a^3, 0<=m4<=a^4
+
+cvx_clear;
+
+cvx_begin sdp
+    if verbose==0, cvx_quiet(true); end
+    cvx_solver(cvx_solver_name);
+
+    variables m1 m2 m3 m4 tau
+    variable W(2,2) symmetric
+
+    % Moment LMIs (degree 4 on [-a,a])
+    M2 = [1,  m1, m2;
+          m1, m2, m3;
+          m2, m3, m4];
+
+    M1 = [a^2*1 - m2,    a^2*m1 - m3;
+          a^2*m1 - m3,   a^2*m2 - m4];
+
+    % Jbar(m)
+    Juu = m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2;
+    Jrr = ((1-u^2)^2/(4*r^4))*(m4 + m2^2);
+    Jur = ((1-u^2)/(2*r^2))*( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
+    Jbar = [Juu, Jur; Jur, Jrr];
+
+    minimize( tau )
+
+    subject to
+        % basic bounds (stabilize; valid for support [-a,a])
+        -a   <= m1 <= a;
+         0   <= m2 <= a^2;
+        -a^3 <= m3 <= a^3;
+         0   <= m4 <= a^4;
+
+        0 <= tau <= tauub;
+
+        % truncated moment feasibility on [-a,a]
+        M2 >= 0;
+        M1 >= 0;
+
+        % information matrix positivity
+        Jbar - epsJ*eye(2) >= 0;
+
+        % Schur complement constraint for inverse bound
+        [Jbar, eye(2); eye(2), W] >= 0;
+
+        % PSD of W (redundant but helps)
+        W >= 0;
+
+        % epigraph for trace inverse
+        tau >= trace(W);
+cvx_end
+
+info.cvx_status = cvx_status;
+info.cvx_optval = cvx_optval;
+
+if ~strcmpi(cvx_status,'Solved') && ~strcmpi(cvx_status,'Inaccurate/Solved')
+    error('Stage I failed: %s', cvx_status);
+end
+
+mstar    = [1, m1, m2, m3, m4];
+tau_star = tau;
+Wstar    = W;
+end
+
+%% =====================================================================
+%% =============================== Stage II =============================
+%% =====================================================================
+function [zstar, k_used, r, info] = stage2_ATKMP_flat_extension_cvx(mstar, a, kmax, cvx_solver_name, verbose)
+% Solve SDR_k (k=2..kmax) until flatness rank(Mk)=rank(Mk-1) holds.
+% z = [z0..z_{2k}], constraints:
+%   z0..z4 = m0..m4
+%   Mk(z) >= 0
+%   M_{k-1}(g z) >= 0, g(t)=a^2 - t^2
+% objective: random linear <R,z> (for generic extreme point)
+
+cvx_stat_last = 'NotStarted';
+m0to4 = mstar(:);
+
+for k=2:kmax
+    cvx_clear;
+
+    zlen = 2*k+1;
+    R = randn(zlen,1);
+
+    cvx_begin sdp
+        if verbose==0, cvx_quiet(true); end
+        cvx_solver(cvx_solver_name);
+
+        variable z(zlen,1)
+
+        minimize( R.'*z )
+
+        subject to
+            z(1:5) == m0to4;   % fix z0..z4
+
+            Mk   = moment_matrix_1d_expr(z, k);
+            Mloc = localizing_matrix_1d_expr(z, k-1, a);
+
+            Mk   >= 0;
+            Mloc >= 0;
+    cvx_end
+
+    cvx_stat_last = cvx_status;
+    if ~strcmpi(cvx_status,'Solved') && ~strcmpi(cvx_status,'Inaccurate/Solved')
+        continue;
+    end
+
+    Mk_num  = moment_matrix_1d_numeric(z, k);
+    Mk1_num = moment_matrix_1d_numeric(z, k-1);
+
+    rk  = numeric_rank(Mk_num, 1e-8);
+    rk1 = numeric_rank(Mk1_num, 1e-8);
+
+    if rk == rk1
+        zstar = z(:).';
+        k_used = k;
+        r = rk;
+        info.cvx_status = cvx_status;
+        info.k_used = k_used;
+        info.rank = r;
+        return;
+    end
+end
+
+error('Stage II failed: no k in [2,%d] achieved flatness. Last CVX status: %s', kmax, cvx_stat_last);
+end
+
+function Mk = moment_matrix_1d_expr(z,k)
+Mk = cvx( zeros(k+1,k+1) );
+for i=0:k
+    for j=0:k
+        Mk(i+1,j+1) = z(i+j+1);
+    end
+end
+Mk = (Mk+Mk')/2;
+end
+
+function Mloc = localizing_matrix_1d_expr(z,k,a)
+% g(t)=a^2 - t^2: entry = a^2 z_{i+j} - z_{i+j+2}
+Mloc = cvx( zeros(k+1,k+1) );
+for i=0:k
+    for j=0:k
+        Mloc(i+1,j+1) = a^2*z(i+j+1) - z(i+j+3);
+    end
+end
+Mloc = (Mloc+Mloc')/2;
+end
+
+function Mk = moment_matrix_1d_numeric(z,k)
+Mk = zeros(k+1,k+1);
+for i=0:k
+    for j=0:k
+        Mk(i+1,j+1) = z(i+j+1);
+    end
+end
+Mk = (Mk+Mk')/2;
+end
+
+%% =====================================================================
+%% =========================== Extraction (1D) ===========================
+%% =====================================================================
+function [t_atoms, w_atoms] = extract_atoms_1d_from_z(zstar, mstar, a, r)
+% 1D extraction via Hankel recurrence:
+% z_{i+r} = sum_{j=0}^{r-1} c_j z_{i+j}, i=0..r-1
+H = zeros(r,r);
+b = zeros(r,1);
+for i=0:r-1
+    for j=0:r-1
+        H(i+1,j+1) = zstar(i+j+1);
+    end
+    b(i+1) = zstar(i+r+1);
+end
+c = H\b;
+
+% polynomial p(t)=t^r - sum c_j t^j
+pcoef = [1, -flipud(c(:)).'];  % descending
+rt = roots(pcoef);
+
+tol_im = 1e-7;
+real_roots = rt(abs(imag(rt))<tol_im);
+t_atoms = real(real_roots);
+t_atoms = t_atoms(t_atoms >= -a-1e-8 & t_atoms <= a+1e-8);
+
+if numel(t_atoms) < r
+    [~,ord] = sort(abs(imag(rt)), 'ascend');
+    t_atoms = real(rt(ord(1:r)));
+end
+t_atoms = sort(t_atoms(:));
+
+% weights from first r moments m0..m_{r-1}
+m_needed = mstar(1:r).';
+V = zeros(r,r);
+for ell=0:r-1
+    V(ell+1,:) = (t_atoms.').^ell;
+end
+w_atoms = V \ m_needed;
+
+w_atoms = max(w_atoms,0);
+s = sum(w_atoms);
+if s <= 0
+    w_atoms = ones(r,1)/r;
+else
+    w_atoms = w_atoms/s;
+end
+end
+
+function x = discretize_atoms_to_N(t_atoms, w_atoms, N)
+r = numel(t_atoms);
+raw = w_atoms(:)*N;
+cnt = floor(raw);
+rem = N - sum(cnt);
+[~,ord] = sort(raw - cnt, 'descend');
+for i=1:rem
+    cnt(ord(i)) = cnt(ord(i)) + 1;
+end
+x = [];
+for i=1:r
+    x = [x; repmat(t_atoms(i), cnt(i), 1)];
+end
+x = x(1:min(N,numel(x)));
+if numel(x) < N
+    x = [x; repmat(t_atoms(1), N-numel(x), 1)];
+end
+x = sort(x);
+end
+
+%% =====================================================================
+%% ============================== Utilities =============================
+%% =====================================================================
+function m = moments_from_x(x)
+x = x(:);
+m = [1, mean(x), mean(x.^2), mean(x.^3), mean(x.^4)];
+end
+
+function Jbar = Jbar_from_m(m,u,r)
+m1=m(2); m2=m(3); m3=m(4); m4=m(5);
+Juu = m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2;
+Jrr = ((1-u^2)^2/(4*r^4))*(m4 + m2^2);
+Jur = ((1-u^2)/(2*r^2))*( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
+Jbar = [Juu, Jur; Jur, Jrr];
+end
+
+function rnk = numeric_rank(A, tol)
+s = svd((A+A')/2);
+rnk = sum(s > tol);
+end
+
+function plot_design(figId, a, x_design, t_atoms, w_atoms, u, r, tau_star, tau_design)
+figure(figId); clf;
+
+subplot(2,1,1);
+stem(t_atoms, w_atoms, 'filled'); grid on;
+xlim([-a a]);
+xlabel('Atom location t_i'); ylabel('Weight w_i');
+title(sprintf('Atoms (u=%.2f, r=%.2f)', u, r));
+
+subplot(2,1,2);
+scatter(x_design, zeros(size(x_design)), 25, 'filled'); grid on;
+xlim([-a a]); ylim([-0.5 0.5]);
+yticks([]); xlabel('Antenna position x_n');
+title(sprintf('Discretized array (N=%d): tau*=%.3e, tau(des)=%.3e', ...
+    numel(x_design), tau_star, tau_design));
+end
+
 function check_feasible_point_ULA(u,r,a,epsJ,tauub,N)
-% Check whether the ULA-induced point satisfies *your implemented* PMI constraints.
 x = linspace(-a,a,N).';
 m = [1, mean(x), mean(x.^2), mean(x.^3), mean(x.^4)];
 J = Jbar_from_m(m,u,r);
