@@ -1,56 +1,50 @@
-%% Monostatic Sensing Array Design: Two-Stage Algorithm (Fixed)
-% Strictly follows the draft methodology:
-%   Stage 1: Lasserre Moment-SOS Hierarchy (Order d=2) with numerical safeguards
-%   Stage 2: Flat Extension & Atomic Extraction via Vandermonde Decomposition
+%% Monostatic Sensing Array Design: Two-Stage Algorithm (Robust Fixed)
+% 1. Stage I: Lasserre Hierarchy (Softened Constraints)
+% 2. Stage II: Flat Extension (Soft Matching) to prevent infeasibility
+% 3. Visualization
 
 clear; clc; close all;
-cvx_clear; % <--- 关键修复：清除之前的 CVX 状态
+cvx_clear; 
 
 %% 1. SYSTEM PARAMETERS
 fprintf('--- Setting up System Parameters ---\n');
-N_ant = 8;              % Number of antennas
-D_lambda = 10;          % Aperture length (wavelengths)
-a_lambda = D_lambda/2;  % Half-aperture
-theta_deg = 30;         % Target AoA
-R_lambda = 50;          % Target Range
+N_ant = 8;              
+D_lambda = 10;          
+a_lambda = D_lambda/2;  
+theta_deg = 30;         
+R_lambda = 50;          
 
-% Normalized Parameters for Optimization [-1, 1]
-% We solve the problem in the normalized domain t \in [-1, 1]
-% Physical position x = a * t
+% Normalized Parameters [-1, 1]
 u = cosd(theta_deg);
 r = R_lambda;
 a = a_lambda;
 scale_fac = a; 
 
-%% 2. STAGE I: Global Optimization via Lasserre Hierarchy
+%% 2. STAGE I: Global Optimization (Lasserre)
 fprintf('--- Stage I: Lasserre Hierarchy (d=2, Normalized) ---\n');
 
-% Optimization Variables: [m1, m2, m3, m4, W11, W12, W22, tau]
-% All m_k are normalized moments in [-1, 1]
 n_xi = 8; 
 deg_relaxation = 2; 
 deg_moments = 2 * deg_relaxation;
-
-% Generate Monomial Basis
 powers = generate_monomial_powers(n_xi, deg_moments);
 n_y = size(powers, 1);
-
-% Identify indices
 idx_const = 1; 
 idx_tau = find_power_index(powers, [0 0 0 0 0 0 0 1]);
 
-% Solver Settings
-% cvx_solver sedumi % Uncomment if you have SeDuMi installed
-% cvx_solver sdpt3 % Default fallback
+% Solver: SeDuMi is best for moments, SDPT3 is okay.
+% cvx_solver sedumi 
 
 try
     cvx_begin sdp
         variable y(n_y)
         
-        % Objective: Minimize tau + slight regularization
+        % Build Moment Matrix
         [Md_idx, dim_Md] = build_moment_matrix_idx(powers, deg_relaxation);
         M_d = y(Md_idx);
-        minimize( y(idx_tau) + 1e-5 * trace(M_d) )
+        
+        % Objective: Minimize tau + Regularization
+        % Increased regularization slightly to enforce boundedness
+        minimize( y(idx_tau) + 1e-3 * trace(M_d) )
         
         subject to
             % 1. Unit Mass
@@ -59,183 +53,173 @@ try
             % 2. Moment Matrix PSD
             M_d == semidefinite(dim_Md);
             
-            % 3. Redundant Bounds for Stability
-            % Diagonal elements correspond to moments of squares, must be <= 1 for measure on [-1,1]
-            diag(M_d) <= 1.1; 
+            % 3. Bounds (Relaxed)
             y(idx_tau) >= 0;
-
-            % 4. Validity of Measure on [-1, 1]
-            % Localizing Matrix for g(t) = 1 - t^2 >= 0
-            % This implies M_{d-1}(y) - M_{d-1}(t^2 * y) >= 0
-            % We need to find which variables correspond to t (m1, m2, m3, m4 are moments OF t, 
-            % but in Lasserre Stage 1, we treat 'm' as the variable x).
-            % WAIT: In problem (Pm'), the variable is m. The constraint M2(m)>=0 is linear in m.
-            % So we need E_y [ M2(m) ] >= 0.
             
-            % Extract expected moments E[m] from y
+            % 4. Expected Moments E[m] constraints
+            % Extract symbolic expressions for E[m_k]
             expected_m = cvx(zeros(5,1));
-            expected_m(1) = 1;
+            expected_m(1) = 1; 
             for k=1:4
-                % Find index for monomial corresponding to m_k (variable k)
+                % map to variable index k (1-based in powers is column k)
                 p_vec = zeros(1, n_xi); p_vec(k) = 1;
                 [~, idx] = ismember(p_vec, powers, 'rows');
                 expected_m(k+1) = y(idx);
             end
             
-            % Constraint: Hankel(expected_m) >= 0 (Validity of m as a moment seq)
+            % Hankel Constraints on Expected Moments
             H_m = hankel_matrix_var(expected_m, 2);
             H_m == semidefinite(3);
             
-            % Constraint: Localizing(expected_m) >= 0 on [-1,1]
-            H_m_sub = hankel_matrix_var(expected_m(1:end-2), 1);
-            H_m_shf = hankel_matrix_var(expected_m(3:end), 1);
-            (H_m_sub - H_m_shf) == semidefinite(2);
+            % Localizing on [-1, 1]
+            H_sub = hankel_matrix_var(expected_m(1:end-2), 1);
+            H_shf = hankel_matrix_var(expected_m(3:end), 1);
+            (H_sub - H_shf) == semidefinite(2);
             
-            % 5. PMI Constraint construction
-            % We construct the 4x4 block matrix where each entry is a localizing matrix block
+            % 5. PMI Constraint (Fisher Information)
             [basis_local, dim_local] = get_basis_indices(powers, deg_relaxation - 1);
-            dim_PMI = 4 * dim_local;
+            epsilon = 1e-5; % Relaxed epsilon
             
-            epsilon = 1e-4;
+            % -- Construct PMI Blocks --
+            c2 = scale_fac^2; c3 = (2*u/r)*scale_fac^3; c4 = (u^2/r^2)*scale_fac^4;
+            L_Juu_lin = c2*blk_var(y,powers,basis_local,2) + c3*blk_var(y,powers,basis_local,3) + c4*blk_var(y,powers,basis_local,4);
             
-            % J_uu Scaled construction
-            c2 = scale_fac^2; 
-            c3 = (2*u/r)*scale_fac^3; 
-            c4 = (u^2/r^2)*scale_fac^4;
+            q11 = scale_fac^2; q12 = 2*(u/r)*scale_fac^3; q22 = (u^2/r^2)*scale_fac^4;
+            L_m1m1 = blk_prod(y,powers,basis_local,1,1);
+            L_m1m2 = blk_prod(y,powers,basis_local,1,2);
+            L_m2m2 = blk_prod(y,powers,basis_local,2,2);
+            L_Juu_quad = q11*L_m1m1 + q12*L_m1m2 + q22*L_m2m2;
+            L_Juu = L_Juu_lin + L_Juu_quad - epsilon*eye(dim_local);
             
-            % Linear parts of J_uu
-            L_Juu_lin = c2 * blk_var(y, powers, basis_local, 2) + ...
-                        c3 * blk_var(y, powers, basis_local, 3) + ...
-                        c4 * blk_var(y, powers, basis_local, 4);
-                        
-            % Quadratic parts: m1^2, m1m2, m2^2
-            q11 = scale_fac^2;
-            q12 = 2*(u/r)*scale_fac^3;
-            q22 = (u^2/r^2)*scale_fac^4;
-            
-            L_m1m1 = blk_prod(y, powers, basis_local, 1, 1);
-            L_m1m2 = blk_prod(y, powers, basis_local, 1, 2);
-            L_m2m2 = blk_prod(y, powers, basis_local, 2, 2);
-            
-            L_Juu_quad = q11 * L_m1m1 + q12 * L_m1m2 + q22 * L_m2m2;
-            L_Juu = L_Juu_lin + L_Juu_quad - epsilon * eye(dim_local);
-            
-            % J_rr
             C_rr = (1-u^2)^2 / (4*r^4);
-            L_Jrr = C_rr * scale_fac^4 * (blk_var(y, powers, basis_local, 4) + L_m2m2) - epsilon * eye(dim_local);
+            L_Jrr = C_rr*scale_fac^4 * (blk_var(y,powers,basis_local,4) + L_m2m2) - epsilon*eye(dim_local);
             
-            % J_ur
             C_ur = (1-u^2) / (2*r^2);
-            term_m3 = scale_fac^3 * blk_var(y, powers, basis_local, 3);
-            term_m4 = (u/r)*scale_fac^4 * blk_var(y, powers, basis_local, 4);
-            term_12 = scale_fac^3 * L_m1m2;
-            term_22 = (u/r)*scale_fac^4 * L_m2m2;
-            L_Jur = C_ur * (term_m3 + term_m4 + term_12 + term_22);
+            L_Jur = C_ur * (scale_fac^3*blk_var(y,powers,basis_local,3) + (u/r)*scale_fac^4*blk_var(y,powers,basis_local,4) + ...
+                            scale_fac^3*L_m1m2 + (u/r)*scale_fac^4*L_m2m2);
             
-            % W blocks (Vars 5,6,7 correspond to W11, W12, W22)
-            L_W11 = blk_var(y, powers, basis_local, 5);
-            L_W12 = blk_var(y, powers, basis_local, 6);
-            L_W22 = blk_var(y, powers, basis_local, 7);
-            L_I   = blk_var(y, powers, basis_local, 0); 
-            
+            L_W11 = blk_var(y,powers,basis_local,5); L_W12 = blk_var(y,powers,basis_local,6); L_W22 = blk_var(y,powers,basis_local,7);
+            L_I = blk_var(y,powers,basis_local,0);
             Z = cvx(zeros(dim_local, dim_local));
             
-            % Full PMI LMI
-            PMI = [L_Juu, L_Jur, L_I,   Z;
-                   L_Jur, L_Jrr, Z,     L_I;
-                   L_I,   Z,     L_W11, L_W12;
-                   Z,     L_I,   L_W12, L_W22];
-               
-            PMI == semidefinite(4*dim_local);
+            % PMI LMI
+            [L_Juu, L_Jur, L_I, Z; L_Jur, L_Jrr, Z, L_I; L_I, Z, L_W11, L_W12; Z, L_I, L_W12, L_W22] == semidefinite(4*dim_local);
             
-            % Trace Constraint: tau - tr(W) >= 0
-            L_tau = blk_var(y, powers, basis_local, 8);
+            % Trace Constraint
+            L_tau = blk_var(y,powers,basis_local,8);
             (L_tau - (L_W11 + L_W22)) == semidefinite(dim_local);
             
     cvx_end
     
     if contains(cvx_status, 'Solved') || contains(cvx_status, 'Inaccurate')
-        fprintf('Stage I Converged. Optimal tau: %.4f\n', cvx_optval);
-        tm_star = expected_m; 
+        fprintf('Stage I Converged. tau: %.4f\n', cvx_optval);
+        tm_star = double(expected_m); % Explicit double conversion here
     else
-        % If Infeasible, throw error to trigger catch block
-        error('Lasserre Stage I failed (Infeasible or Unbounded).');
+        error('Solver returned status: %s', cvx_status);
     end
 
 catch ME
-    fprintf('\n!!! Lasserre Method Failed (Status: %s) !!!\n', cvx_status);
-    fprintf('Reason: %s\n', ME.message);
-    fprintf('Switching to Fallback: Simple Uniform Initialization\n');
-    % Fallback: uniform distribution on [-1, 1]
+    fprintf('\n!!! Stage I Warning: %s !!!\n', ME.message);
+    fprintf('Switching to Fallback: Uniform Initialization\n');
+    % Fallback: uniform distribution moments
     m_fall = zeros(5,1); m_fall(1)=1;
-    t_uni = linspace(-1,1,N_ant);
+    t_uni = linspace(-1,1,N_ant)';
     for k=1:4, m_fall(k+1) = mean(t_uni.^k); end
     tm_star = m_fall;
 end
 
-fprintf('Normalized Moments: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', tm_star);
+fprintf('Target Normalized Moments: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', tm_star);
 
-%% 3. STAGE II: Atomic Extraction
-fprintf('\n--- Stage II: Atomic Extraction ---\n');
+%% 3. STAGE II: Atomic Extraction (Soft Matching)
+fprintf('\n--- Stage II: Atomic Extraction (Robust) ---\n');
 
-% Flat Extension
+% We need to find a valid measure 'z' that is CLOSE to 'tm_star'.
+% Using hard equality z(1:5) == tm_star often causes infeasibility due to numeric noise.
 K_ext = N_ant; 
 n_z = 2*K_ext + 1;
 
 cvx_begin sdp quiet
     variable z(n_z)
-    minimize(0)
+    % Objective: Minimize distance to target moments + trace regularization (low rank)
+    minimize( 100 * norm(z(1:5) - tm_star) + 1e-2 * z(1) ) 
+    
     subject to
-        z(1:5) == tm_star;
+        % Base validity
+        z(1) >= 0.99; % Mass approx 1
+        
+        % Hankel PSD (Valid Moment Sequence)
         H = hankel_matrix_var(z, K_ext);
         H == semidefinite(K_ext+1);
         
-        % Localizing [-1,1]
+        % Localizing [-1, 1]
         H_sub = hankel_matrix_var(z(1:end-2), K_ext-1);
         H_shf = hankel_matrix_var(z(3:end), K_ext-1);
         (H_sub - H_shf) == semidefinite(K_ext);
 cvx_end
 
-% Extract Atoms
-H_val = double(hankel_matrix_var(z, K_ext));
-r_rank = N_ant; 
-% Use try-catch for extraction stability
-try
-    H0 = H_val(1:end-1, 1:r_rank);
-    H1 = H_val(2:end, 1:r_rank);
-    atoms_norm = eig(pinv(H0) * H1);
-    atoms_norm = sort(real(atoms_norm));
-    % Filter outliers
-    atoms_norm = atoms_norm(abs(atoms_norm) <= 1.05); 
-catch
-    atoms_norm = linspace(-1, 1, N_ant)';
+% Robust Check before Conversion
+if ~contains(cvx_status, 'Solved') && ~contains(cvx_status, 'Inaccurate')
+    fprintf('Stage II Optimization Failed (Status: %s). Using fallback layout.\n', cvx_status);
+    atoms_phys = linspace(-a, a, N_ant)';
+    weights = ones(N_ant, 1)/N_ant;
+else
+    fprintf('Stage II Converged. Extracting atoms...\n');
+    % Convert to double ONLY now
+    H_val = double(hankel_matrix_var(z, K_ext));
+    
+    % Extraction (ESPRIT / Vandermonde)
+    r_rank = N_ant; 
+    try
+        % Stabilize Hankel: Use SVD to enforce rank N
+        [U, S, V] = svd(H_val);
+        H_clean = U(:,1:r_rank) * S(1:r_rank,1:r_rank) * V(:,1:r_rank)';
+        
+        H0 = H_clean(1:end-1, 1:r_rank);
+        H1 = H_clean(2:end,   1:r_rank);
+        
+        atoms_norm = eig(pinv(H0) * H1);
+        atoms_norm = real(atoms_norm);
+        atoms_norm = atoms_norm(abs(atoms_norm) <= 1.01); % Filter valid
+        atoms_norm = sort(atoms_norm);
+        
+        % If fewer atoms found, pad with uniform
+        if length(atoms_norm) < N_ant
+            fprintf('Warning: Only %d atoms valid. Filling rest.\n', length(atoms_norm));
+            atoms_norm = [atoms_norm; linspace(-0.9, 0.9, N_ant - length(atoms_norm))'];
+            atoms_norm = sort(atoms_norm);
+        end
+        
+        atoms_phys = atoms_norm * scale_fac;
+        
+        % Weights
+        m_phys = zeros(5,1);
+        for k=0:4, m_phys(k+1) = tm_star(k+1) * scale_fac^k; end
+        
+        V_mat = zeros(5, length(atoms_phys));
+        for i=1:5, V_mat(i,:) = atoms_phys'.^(i-1); end
+        weights = lsqnonneg(V_mat, m_phys);
+        
+    catch ME
+        fprintf('Extraction Error: %s. Using uniform.\n', ME.message);
+        atoms_phys = linspace(-a, a, N_ant)';
+        weights = ones(N_ant, 1)/N_ant;
+    end
 end
-
-% Physical Domain
-atoms_phys = atoms_norm * scale_fac;
-
-% Recover Weights
-m_phys = zeros(5,1);
-for k=0:4
-    m_phys(k+1) = tm_star(k+1) * scale_fac^k;
-end
-V = zeros(5, length(atoms_phys));
-for i=1:5
-    V(i,:) = atoms_phys'.^(i-1);
-end
-weights = lsqnonneg(V, m_phys);
 
 %% 4. VISUALIZATION
-figure;
-stem(atoms_phys, weights, 'filled', 'LineWidth', 2);
-title(sprintf('Optimized Array (N=%d)', length(atoms_phys)));
-xlabel('Position (\lambda)'); ylabel('Weight');
+figure('Name', 'Optimized Array');
+stem(atoms_phys, weights, 'filled', 'LineWidth', 2, 'Color', 'b');
+hold on;
+% Plot Uniform for Comparison
+stem(linspace(-a,a,N_ant), 0.5*ones(N_ant,1)/N_ant, 'r--', 'Marker', 'none');
+legend('Optimized (Lasserre)', 'Uniform (Ref)');
+title(sprintf('Array Layout (N=%d, \theta=%.1f\circ)', N_ant, theta_deg));
+xlabel('Position (\lambda)'); ylabel('Excitation Weight');
 grid on; xlim([-a-1, a+1]);
-xline([-a, a], 'r--', 'Aperture');
+xline([-a, a], 'k:', 'Aperture');
 
 
-%% --- AUXILIARY FUNCTIONS ---
-
+%% --- AUX FUNCTIONS (Keep these unchanged) ---
 function powers = generate_monomial_powers(n, d)
     if n==1, powers=(0:d)'; return; end
     sub = generate_monomial_powers(n-1, d);
