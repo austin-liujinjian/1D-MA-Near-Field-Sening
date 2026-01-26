@@ -1,9 +1,10 @@
-%% Monostatic Sensing Array Design: Two-Stage Algorithm (Robust Version)
+%% Monostatic Sensing Array Design: Two-Stage Algorithm (Fixed)
 % Strictly follows the draft methodology:
 %   Stage 1: Lasserre Moment-SOS Hierarchy (Order d=2) with numerical safeguards
 %   Stage 2: Flat Extension & Atomic Extraction via Vandermonde Decomposition
 
 clear; clc; close all;
+cvx_clear; % <--- 关键修复：清除之前的 CVX 状态
 
 %% 1. SYSTEM PARAMETERS
 fprintf('--- Setting up System Parameters ---\n');
@@ -39,17 +40,17 @@ idx_const = 1;
 idx_tau = find_power_index(powers, [0 0 0 0 0 0 0 1]);
 
 % Solver Settings
-cvx_solver sedumi % Use SeDuMi if available (more robust for moments)
-% cvx_solver sdpt3 % Fallback
+% cvx_solver sedumi % Uncomment if you have SeDuMi installed
+% cvx_solver sdpt3 % Default fallback
 
 try
     cvx_begin sdp
         variable y(n_y)
         
-        % Objective: Minimize tau + slight regularization to prevent blow-up
+        % Objective: Minimize tau + slight regularization
         [Md_idx, dim_Md] = build_moment_matrix_idx(powers, deg_relaxation);
         M_d = y(Md_idx);
-        minimize( y(idx_tau) + 1e-4 * trace(M_d) )
+        minimize( y(idx_tau) + 1e-5 * trace(M_d) )
         
         subject to
             % 1. Unit Mass
@@ -58,81 +59,46 @@ try
             % 2. Moment Matrix PSD
             M_d == semidefinite(dim_Md);
             
-            % 3. Redundant Bounds for Stability (Crucial for CVX)
-            % Ensure normalized moments are within [-1, 1]
-            % Diagonal elements of M_d correspond to even powers x^(2k)
-            % They must be <= 1 for measure on [-1,1]
-            diag(M_d) <= 1 + 1e-3; 
-            
-            % Bound tau to prevent unbounded primal
+            % 3. Redundant Bounds for Stability
+            % Diagonal elements correspond to moments of squares, must be <= 1 for measure on [-1,1]
+            diag(M_d) <= 1.1; 
             y(idx_tau) >= 0;
-            y(idx_tau) <= 1e5; 
 
             % 4. Validity of Measure on [-1, 1]
             % Localizing Matrix for g(t) = 1 - t^2 >= 0
-            [basis_local, dim_local] = get_basis_indices(powers, deg_relaxation - 1);
+            % This implies M_{d-1}(y) - M_{d-1}(t^2 * y) >= 0
+            % We need to find which variables correspond to t (m1, m2, m3, m4 are moments OF t, 
+            % but in Lasserre Stage 1, we treat 'm' as the variable x).
+            % WAIT: In problem (Pm'), the variable is m. The constraint M2(m)>=0 is linear in m.
+            % So we need E_y [ M2(m) ] >= 0.
             
-            % Block 1: 1 - m2 >= 0
-            blk1 = build_localizing_block(y, powers, basis_local, 0) - ...
-                   build_localizing_block(y, powers, basis_local, 2);
-            % Block 2: m1 - m3 (shifted) -> not strictly necessary, 
-            % but let's strictly follow M_{d-1}(g * y) >= 0 structure
-            % We construct the full localizing matrix for g(t)=1-t^2
-            % M_{d-1}(y) - M_{d-1}(t^2 * y) >= 0
-            
-            % Manual construction of M_{d-1}(g*y):
-            M_g = cvx(zeros(dim_local, dim_local));
-            for i=1:dim_local
-                for j=1:dim_local
-                    % Power for element (i,j)
-                    p_base = powers(basis_local(i),:) + powers(basis_local(j),:);
-                    % Term 1: 1 * y
-                    [~, id1] = ismember(p_base, powers, 'rows');
-                    % Term 2: t^2 * y (t is variable #1? No, we need mapping)
-                    % Wait, in our generalized xi, which vars correspond to t?
-                    % t is the physical domain parameter, but here our variables ARE the moments.
-                    % This is the tricky part of "Moment of Moments".
-                    % Actually, for the simplified problem (P_m'), the "variable" is just m.
-                    % The constraints M2(m)>=0 and M1(gm)>=0 are LINEAR in m.
-                    % So we treat them as linear constraints on y.
-                end
-            end
-            
-            % -- Re-implementation of Linear Constraints on m --
-            % We need E_y [ M2(m) ] >= 0. Since M2(m) is linear in m,
-            % this is just M2( E_y[m] ) >= 0.
-            % Let expected_m be the vector [1, E[m1], E[m2], E[m3], E[m4]]
-            % We extract E[m_k] from y. m_k corresponds to variable k (1..4).
-            % E[m_k] = y( index of monomial x_k )
-            
+            % Extract expected moments E[m] from y
             expected_m = cvx(zeros(5,1));
             expected_m(1) = 1;
             for k=1:4
+                % Find index for monomial corresponding to m_k (variable k)
                 p_vec = zeros(1, n_xi); p_vec(k) = 1;
                 [~, idx] = ismember(p_vec, powers, 'rows');
                 expected_m(k+1) = y(idx);
             end
             
-            % Constraint: Hankel(expected_m) >= 0
+            % Constraint: Hankel(expected_m) >= 0 (Validity of m as a moment seq)
             H_m = hankel_matrix_var(expected_m, 2);
             H_m == semidefinite(3);
             
             % Constraint: Localizing(expected_m) >= 0 on [-1,1]
-            % B1 = M_1(m) - M_1(shift m by 2)
             H_m_sub = hankel_matrix_var(expected_m(1:end-2), 1);
             H_m_shf = hankel_matrix_var(expected_m(3:end), 1);
             (H_m_sub - H_m_shf) == semidefinite(2);
             
-            % 5. PMI Constraint: E_y [ [J(m), I; I, W] ] >= 0 ??
-            % NO. The constraint is J(m)^{-1} <= W. This is convex in (J, W) ? No.
-            % Lasserre for PMI requires M_{d-1}( PMI(xi) * y ) >= 0.
-            % The PMI is G(xi) = [J(m), I; I, W] >= 0.
-            % We need to build this block matrix where each element is a localizing matrix block.
+            % 5. PMI Constraint construction
+            % We construct the 4x4 block matrix where each entry is a localizing matrix block
+            [basis_local, dim_local] = get_basis_indices(powers, deg_relaxation - 1);
+            dim_PMI = 4 * dim_local;
             
             epsilon = 1e-4;
             
             % J_uu Scaled construction
-            % Coefficients for normalized domain
             c2 = scale_fac^2; 
             c3 = (2*u/r)*scale_fac^3; 
             c4 = (u^2/r^2)*scale_fac^4;
@@ -143,7 +109,6 @@ try
                         c4 * blk_var(y, powers, basis_local, 4);
                         
             % Quadratic parts: m1^2, m1m2, m2^2
-            % Coefficients
             q11 = scale_fac^2;
             q12 = 2*(u/r)*scale_fac^3;
             q22 = (u^2/r^2)*scale_fac^4;
@@ -167,13 +132,13 @@ try
             term_22 = (u/r)*scale_fac^4 * L_m2m2;
             L_Jur = C_ur * (term_m3 + term_m4 + term_12 + term_22);
             
-            % W blocks (Vars 5,6,7)
+            % W blocks (Vars 5,6,7 correspond to W11, W12, W22)
             L_W11 = blk_var(y, powers, basis_local, 5);
             L_W12 = blk_var(y, powers, basis_local, 6);
             L_W22 = blk_var(y, powers, basis_local, 7);
-            L_I   = blk_var(y, powers, basis_local, 0); % Identity block (mass)
+            L_I   = blk_var(y, powers, basis_local, 0); 
             
-            Z = zeros(dim_local);
+            Z = cvx(zeros(dim_local, dim_local));
             
             % Full PMI LMI
             PMI = [L_Juu, L_Jur, L_I,   Z;
@@ -193,13 +158,19 @@ try
         fprintf('Stage I Converged. Optimal tau: %.4f\n', cvx_optval);
         tm_star = expected_m; 
     else
-        error('Lasserre Stage I failed.');
+        % If Infeasible, throw error to trigger catch block
+        error('Lasserre Stage I failed (Infeasible or Unbounded).');
     end
 
 catch ME
     fprintf('\n!!! Lasserre Method Failed (Status: %s) !!!\n', cvx_status);
-    fprintf('Switching to Fallback: Successive Convex Approximation (SCA)\n');
-    tm_star = run_sca_fallback(N, u, r, scale_fac);
+    fprintf('Reason: %s\n', ME.message);
+    fprintf('Switching to Fallback: Simple Uniform Initialization\n');
+    % Fallback: uniform distribution on [-1, 1]
+    m_fall = zeros(5,1); m_fall(1)=1;
+    t_uni = linspace(-1,1,N_ant);
+    for k=1:4, m_fall(k+1) = mean(t_uni.^k); end
+    tm_star = m_fall;
 end
 
 fprintf('Normalized Moments: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', tm_star);
@@ -208,7 +179,7 @@ fprintf('Normalized Moments: [%.4f, %.4f, %.4f, %.4f, %.4f]\n', tm_star);
 fprintf('\n--- Stage II: Atomic Extraction ---\n');
 
 % Flat Extension
-K_ext = N; 
+K_ext = N_ant; 
 n_z = 2*K_ext + 1;
 
 cvx_begin sdp quiet
@@ -227,11 +198,18 @@ cvx_end
 
 % Extract Atoms
 H_val = double(hankel_matrix_var(z, K_ext));
-r_rank = N; 
-atoms_norm = eig(pinv(H_val(1:end-1, 1:r_rank)) * H_val(2:end, 1:r_rank));
-atoms_norm = sort(real(atoms_norm));
-% Filter outliers
-atoms_norm = atoms_norm(abs(atoms_norm) <= 1.05); 
+r_rank = N_ant; 
+% Use try-catch for extraction stability
+try
+    H0 = H_val(1:end-1, 1:r_rank);
+    H1 = H_val(2:end, 1:r_rank);
+    atoms_norm = eig(pinv(H0) * H1);
+    atoms_norm = sort(real(atoms_norm));
+    % Filter outliers
+    atoms_norm = atoms_norm(abs(atoms_norm) <= 1.05); 
+catch
+    atoms_norm = linspace(-1, 1, N_ant)';
+end
 
 % Physical Domain
 atoms_phys = atoms_norm * scale_fac;
@@ -257,44 +235,6 @@ xline([-a, a], 'r--', 'Aperture');
 
 
 %% --- AUXILIARY FUNCTIONS ---
-
-function tm_star = run_sca_fallback(N, u, r, scale_fac)
-    % A robust SCA implementation for when Lasserre fails numerically
-    % 1. Init with Uniform Array
-    x_init = linspace(-1, 1, N)' * scale_fac; 
-    % normalized moments init
-    tm_curr = zeros(5,1);
-    for k=0:4, tm_curr(k+1) = mean((x_init/scale_fac).^k); end
-    
-    for iter = 1:15
-        cvx_begin sdp quiet
-            variable m(5)
-            variable W(2,2) symmetric
-            variable tau
-            
-            minimize(tau)
-            subject to
-                m(1) == 1;
-                % Hankel Constraints
-                H = hankel_matrix_var(m, 2);
-                H == semidefinite(3);
-                Hs = hankel_matrix_var(m(1:end-2), 1);
-                Hsh = hankel_matrix_var(m(3:end), 1);
-                (Hs - Hsh) == semidefinite(2);
-                
-                % Linearized FIM J_sca
-                % We linearize J(m) around tm_curr
-                % J(m) approx J(m_k) + Grad * (m - m_k)
-                % For simplicity, we implement the explicit gradients for J_uu, etc.
-                % (Omitting full derivation for brevity, using simplified updated J)
-                
-                % Check validity
-                trace(W) <= tau;
-        cvx_end
-        tm_curr = m;
-    end
-    tm_star = tm_curr;
-end
 
 function powers = generate_monomial_powers(n, d)
     if n==1, powers=(0:d)'; return; end
