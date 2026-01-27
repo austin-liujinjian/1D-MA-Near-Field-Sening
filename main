@@ -1,5 +1,3 @@
-run_sanity_checks(x_array, Nant, a, lambda, u, r, cFIM, eps_det);
-
 function run_sanity_checks(x_two_stage, Nant, a, lambda, u, r, cFIM, eps_det)
 % ============================================================
 % Sanity check: compare objective across multiple geometries
@@ -8,21 +6,25 @@ function run_sanity_checks(x_two_stage, Nant, a, lambda, u, r, cFIM, eps_det)
 %   (2) Two-edge (+/-a, 50/50)
 %   (3) All-left (-a)
 %   (4) All-right (+a)
-%   (5) Sparse ULA on [-a,a] with spacing >= dmin if possible
-%   (6) 3-point (-a,0,+a) with center weight 0.5
+%   (5) Sparse ULA (try spacing >= dmin, else fallback to ULA)
+%   (6) 3-point (-a,0,+a), center weight=0.5
 %
-% Outputs:
-%   det(Jbar), tr(Jbar^{-1}) (weighted for Cartesian trace), tr(J^{-1})
+% Requires existing function in this file scope:
+%   - Jbar_from_m(m,u,r)
 % ============================================================
 
     fprintf('\n============================================================\n');
-    fprintf(' Sanity Check: objective comparison (same u,r,a,lambda, Nant)\n');
+    fprintf(' Sanity Check: objective comparison (same u,r,a,lambda,Nant)\n');
     fprintf('============================================================\n');
 
-    % Suggested min spacing for ULA/sparse ULA (engineering baseline)
-    dmin = 0.5 * lambda;
+    dmin = 0.5 * lambda;   % engineering baseline
 
-    % ---- Build candidate arrays ----
+    % ---- Case builders ----
+    x_two_stage = x_two_stage(:);
+    if length(x_two_stage) ~= Nant
+        warning('x_two_stage length=%d != Nant=%d. Proceeding anyway.', length(x_two_stage), Nant);
+    end
+
     x_all_left   = (-a) * ones(Nant,1);
     x_all_right  = ( a) * ones(Nant,1);
 
@@ -31,11 +33,10 @@ function run_sanity_checks(x_two_stage, Nant, a, lambda, u, r, cFIM, eps_det)
     nR = Nant - nL;
     x_two_edge = [(-a)*ones(nL,1); (a)*ones(nR,1)];
 
-    % Sparse ULA: try enforce spacing >= dmin, otherwise fallback to full ULA
+    % Sparse ULA on [-a,a]
     x_sparse_ula = build_sparse_ula_on_aperture(Nant, a, dmin);
 
-    % 3-point with center weight 0.5 -> counts: [0.25, 0.5, 0.25]
-    % Rounding to Nant (largest-remainder)
+    % 3-point with center weight 0.5 -> weights [0.25, 0.5, 0.25]
     t3 = [-a; 0; a];
     w3 = [0.25; 0.50; 0.25];
     x_3pt_center05 = build_array_from_atoms_lr(t3, w3, Nant);
@@ -50,7 +51,6 @@ function run_sanity_checks(x_two_stage, Nant, a, lambda, u, r, cFIM, eps_det)
         '3-point (w0=0.5)',      x_3pt_center05
     };
 
-    % Header
     fprintf('%-22s | %-12s | %-14s | %-14s\n', ...
         'Case', 'det(Jbar)', 'tr(Jbar^{-1})', 'tr(J^{-1})');
     fprintf('%s\n', repmat('-',1,70));
@@ -72,34 +72,31 @@ function run_sanity_checks(x_two_stage, Nant, a, lambda, u, r, cFIM, eps_det)
 end
 
 function x = build_sparse_ula_on_aperture(Nant, a, dmin)
-% Build a "sparse ULA" baseline:
-%   - Try to place Nant points uniformly in [-a,a] with spacing >= dmin.
-%   - If impossible, fallback to standard ULA with Nant points over [-a,a].
+% Try to satisfy spacing >= dmin by using a dense grid then subsampling.
+% If Nant too large to meet dmin, fall back to standard ULA with Nant points.
 
     if Nant <= 1
         x = 0;
         return;
     end
 
-    % If we require spacing >= dmin, max count possible is floor(2a/dmin)+1
-    maxN = floor((2*a)/dmin) + 1;
+    maxN = floor((2*a)/dmin) + 1;  % maximum number with spacing >= dmin
 
     if Nant <= maxN
-        % Choose Nant points equally spaced with step >= dmin by spanning full aperture
-        % A simple way: take maxN grid then subsample evenly to Nant points.
         x_full = linspace(-a, a, maxN).';
         idx = round(linspace(1, maxN, Nant));
         idx = unique(idx, 'stable');
-        % If uniqueness reduced count, adjust by filling nearest neighbors
+
+        % Fill if uniqueness reduced count (rare)
         while length(idx) < Nant
             cand = setdiff(1:maxN, idx);
-            % add the middle-most remaining
-            [~, j] = min(abs(cand - (maxN+1)/2));
+            [~, j] = min(abs(cand - (maxN+1)/2)); % add most central remaining
             idx = sort([idx, cand(j)]); %#ok<AGROW>
         end
+
         x = x_full(idx);
     else
-        % Cannot satisfy dmin with Nant -> fallback to standard ULA
+        % cannot satisfy dmin -> standard ULA
         x = linspace(-a, a, Nant).';
     end
 
@@ -108,6 +105,7 @@ end
 
 function x_array = build_array_from_atoms_lr(t_atoms, w_atoms, Nant)
 % Largest-remainder rounding from weights to counts, then expand.
+
     t_atoms = t_atoms(:);
     w_atoms = w_atoms(:);
     w_atoms = w_atoms / sum(w_atoms);
@@ -130,14 +128,15 @@ function x_array = build_array_from_atoms_lr(t_atoms, w_atoms, Nant)
     end
 
     if length(x_array) ~= Nant
-        error('Rounding error: expected Nant=%d but got %d.', Nant, length(x_array));
+        error('Rounding mismatch: expected Nant=%d but got %d.', Nant, length(x_array));
     end
 
     x_array = sort(x_array(:));
 end
 
 function m = empirical_moments_order4(x)
-% m_k = (1/N) sum x_n^k, return [m1..m4] as column
+% Return physical moments m=[m1..m4], mk = (1/N) sum x^k
+
     x = x(:);
     m = zeros(4,1);
     for k = 1:4
@@ -146,10 +145,11 @@ function m = empirical_moments_order4(x)
 end
 
 function [fbar, ftrue, detbar] = eval_obj_from_m_consistent(m, u, r, cFIM, eps_det)
-% Evaluate objective consistent with Stage I:
-%   fbar = tr(Jbar^{-1}) for the 2x2 FIM in (u,r) after Jacobian weighting:
-%          fbar = ( r^2/(1-u^2) * Juu_bar + Jrr_bar ) / detbar
+% Objective consistent with your Stage I (same as objective_fbar_of_p):
+%   fbar = ( r^2/(1-u^2)*Juu_bar + Jrr_bar ) / detbar
 %   ftrue = fbar / cFIM
+%
+% Requires existing Jbar_from_m(m,u,r) in this file scope.
 
     [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r);
     detbar = Juu_bar*Jrr_bar - Jur_bar^2;
@@ -160,15 +160,6 @@ function [fbar, ftrue, detbar] = eval_obj_from_m_consistent(m, u, r, cFIM, eps_d
         return;
     end
 
-    fbar = ( (r^2/(1-u^2)) * Juu_bar + Jrr_bar ) / detbar;
+    fbar  = ( (r^2/(1-u^2)) * Juu_bar + Jrr_bar ) / detbar;
     ftrue = fbar / cFIM;
-end
-
-function [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r)
-% Must match your Stage-I closed forms inside common factor cFIM
-    m1=m(1); m2=m(2); m3=m(3); m4=m(4);
-
-    Juu_bar = ( m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2 );
-    Jrr_bar = ( (1-u^2)^2/(4*r^4) ) * ( m4 + m2^2 );
-    Jur_bar = ( (1-u^2)/(2*r^2) ) * ( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
 end
