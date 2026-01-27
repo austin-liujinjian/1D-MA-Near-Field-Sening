@@ -1,356 +1,641 @@
-%% main_fixed_two_stage_cvx.m
-% Monostatic Sensing Array Design: Robust Two-Stage (All CVX, No MOSEK/YALMIP)
-% Stage I : convex SDP with moment Hankel + lifting S for products (CVX-friendly)
-% Stage II: flat-extension-like Hankel completion (small K) + robust atom extraction
-% No Optimization Toolbox needed.
+%% main.m  (Compatible version: no "string", no arguments block)
+% Canonical Step-1 solver for (P_{m'}) at order 4
+% Output: optimal m* = [m1 m2 m3 m4] on K=[-a,a]
+%
+% Requires: Optimization Toolbox (fmincon)
 
-clear; clc; close all;
-cvx_clear;
+clear; clc;
 
-%% ============= 1) SYSTEM PARAMETERS =============
-fprintf('--- Setting up System Parameters ---\n');
+%% ================== Physical / System Inputs ==================
 
-N_ant      = 8;      % number of antennas for final discretization
-D_lambda   = 10;     % aperture length in lambda
-a_lambda   = D_lambda/2;
-theta_deg  = 30;
-R_lambda   = 50;
+% Carrier and wavelength
+c0 = 3e8;                % speed of light (m/s)
+fc = 30e9;               % 30 GHz
+lambda = c0/fc;          % wavelength (m) -> 0.01 m
 
-u = cosd(theta_deg);
-r = R_lambda;
-a = a_lambda;      % physical half-aperture (in lambda)
+% Aperture
+a = 25*lambda;           % half-aperture [-a,a] (m) -> 0.25 m
 
-% Normalize t in [-1,1], x = a * t
-scale_fac = a;
 
-% small eps for PSD strictness
-epsJ = 1e-7;
 
-%% ============= 2) STAGE I (CVX SDP, stable) =============
-fprintf('--- Stage I: Convex SDP (moments + lifting) ---\n');
+% Angle definition: theta is the angle between the target direction and +x axis.
+theta_deg = 15;  % you can also directly set theta_deg, e.g., theta_deg=25;
 
-% Upper bound tau_ub from a feasible uniform array (optional)
-x_uni = linspace(-a,a,N_ant).';
-m_uni = moments_from_x(x_uni);                % physical moments
-J_uni = Jbar_from_phys_m(m_uni, u, r);
-tau_ub = 1.2 * trace(inv(J_uni));
-fprintf('tau_ub (from uniform) = %.6e\n', tau_ub);
+u = cosd(theta_deg);     % u = cos(theta)
+r_min = 0.62*sqrt((2*a*sqrt(1-u^2))^3/lambda);
+r_max = 2*(2*a*sqrt(1-u^2))^2/lambda;
 
-% Solve Stage I over normalized moments tm_k = E[t^k], t in [-1,1]
-% Decision: tm1..tm4, lifting S >= [tm1; tm2]*[tm1 tm2]
-% Then build physical moments by scaling: m1=a tm1, m2=a^2 tm2, m3=a^3 tm3, m4=a^4 tm4
-try
-    cvx_clear;
-    cvx_begin sdp
-        cvx_solver sedumi  % if you have SDPT3, you can switch: cvx_solver sdpt3
+disp([r_min, r_max]);
 
-        variables tm1 tm2 tm3 tm4 tau
-        variable S(2,2) symmetric   % lifting for [tm1, tm2]
+r = 0.25;               % range in meters (consistent with x in meters)
 
-        % Moment Hankel for degree 4 (normalized)
-        % M2(tm) = [[1 tm1 tm2],[tm1 tm2 tm3],[tm2 tm3 tm4]] >= 0
-        M2 = [1,   tm1, tm2;
-              tm1, tm2, tm3;
-              tm2, tm3, tm4];
 
-        % Localizing for g(t)=1-t^2, degree 1 basis => [[z0-z2, z1-z3],[z1-z3, z2-z4]] >= 0
-        % Here z0=1,z1=tm1,z2=tm2,z3=tm3,z4=tm4
-        Mloc = [1 - tm2,  tm1 - tm3;
-                tm1 - tm3, tm2 - tm4];
+% FIM constant c = 4 T N (PT|alpha|^2/sigma^2) kappa^2
+kappa = 2*pi/lambda;     % 2pi/lambda
+SNR_dB = 0;              % 0 dB
+SNR = 10^(SNR_dB/10);    % linear -> 1
+Nant = 24;               % number of antennas
+T = 512;                 % snapshots (or coherent symbols, per your model)
+cFIM = 4*T*Nant*SNR*(kappa^2);
 
-        % Lifting: S >= [tm1;tm2]*[tm1 tm2]  (Schur complement)
-        % [ S    [tm1;tm2]
-        %   [tm1 tm2]   1 ] >= 0  implies S - vv^T >= 0
-        Lift = [S, [tm1;tm2];
-                [tm1 tm2], 1];
+fprintf('--- Parameters ---\n');
+fprintf('theta = %.6g deg, u=%.6g\n', theta_deg, u);
+fprintf('r=%.6g m, lambda=%.6g m, a=%.6g m\n', r, lambda, a);
+fprintf('kappa=%.6g, SNR=%.6g, Nant=%d, T=%d\n', kappa, SNR, Nant, T);
+fprintf('cFIM = %.6g\n\n', cFIM);
 
-        % Build physical-moment-based Jbar entries using lifting
-        % Let alpha = (u/r)*a, etc carefully:
-        % physical:
-        % m1 = a*tm1
-        % m2 = a^2*tm2
-        % m3 = a^3*tm3
-        % m4 = a^4*tm4
-        %
-        % For quadratic terms:
-        % (m1 + (u/r)m2)^2 = a^2*tm1^2 + 2*(u/r)*a^3*tm1*tm2 + (u/r)^2*a^4*tm2^2
-        % We represent tm1^2, tm1*tm2, tm2^2 by S(1,1), S(1,2), S(2,2) (outer relaxation).
-        %
-        % Also m2^2 = a^4 * tm2^2 = a^4 * S(2,2) approx.
+%% ================== Optimization Settings ==================
+Nstart  = 50;        % multi-start count (increase if needed)
+delta   = 1e-4;      % interior margin: p in [delta,1-delta]
+eps_det = 1e-12;     % enforce det(Jbar) >= eps_det   (NOTE: use bar, not scaled by c)
 
-        % coefficients
-        c2 = scale_fac^2;                 % a^2
-        c3 = (2*u/r)*scale_fac^3;         % 2u/r * a^3
-        c4 = (u^2/r^2)*scale_fac^4;       % u^2/r^2 * a^4
+verbose = true;
 
-        % Juu linear part: m2 + 2u/r m3 + u^2/r^2 m4
-        Juu_lin = c2*tm2 + (2*u/r)*scale_fac^3*tm3 + (u^2/r^2)*scale_fac^4*tm4;
+fopt = optimoptions('fmincon', ...
+    'Algorithm', 'sqp', ...
+    'MaxIterations', 1500, ...
+    'MaxFunctionEvaluations', 8e4, ...
+    'OptimalityTolerance', 1e-10, ...
+    'StepTolerance', 1e-12, ...
+    'Display', 'none');
 
-        % Juu quadratic part via S:
-        q11 = scale_fac^2;                 % a^2 * tm1^2
-        q12 = 2*(u/r)*scale_fac^3;         % 2u/r * a^3 * tm1*tm2
-        q22 = (u^2/r^2)*scale_fac^4;       % (u/r)^2 * a^4 * tm2^2
-        Juu_quad = q11*S(1,1) + q12*S(1,2) + q22*S(2,2);
+lb = delta*ones(4,1);
+ub = (1-delta)*ones(4,1);
 
-        Juu = Juu_lin + Juu_quad;
+best_fbar = inf;      % objective based on Jbar
+best_p = nan(4,1);
+best_s = nan(4,1);
+best_m = nan(4,1);
+best_detbar = nan;
 
-        % Jrr = ((1-u^2)^2/(4r^4))*(m4 + m2^2)
-        Crr = (1-u^2)^2/(4*r^4);
-        Jrr = Crr*( scale_fac^4*tm4 + scale_fac^4*S(2,2) );
+%% ================== Multi-start solve ==================
+for k = 1:Nstart
+    p0 = lb + (ub-lb).*rand(4,1);
 
-        % Jur = ((1-u^2)/(2r^2))*( m3 + (u/r)m4 + m1*m2 + (u/r)m2^2 )
-        Cur = (1-u^2)/(2*r^2);
-        Jur = Cur*( scale_fac^3*tm3 + (u/r)*scale_fac^4*tm4 + ...
-                    (scale_fac^3)*S(1,2) + (u/r)*scale_fac^4*S(2,2) );
+    try
+        nonlcon = @(p) detbar_constraint(p, u, r, a, eps_det);
+        objfun  = @(p) objective_fbar_of_p(p, u, r, a, eps_det);
 
-        Jbar = [Juu, Jur; Jur, Jrr];
+        [p_sol, fbar_sol] = fmincon(objfun, p0, [], [], [], [], lb, ub, nonlcon, fopt);
 
-        % Schur for inverse bound: W >= J^{-1}
-        variable W(2,2) symmetric
-        Block = [Jbar, eye(2); eye(2), W];
+        [s_sol, okS] = canonical_p_to_s_order4(p_sol);
+        if ~okS, continue; end
 
-        minimize( tau + 1e-6*trace(S) )   % tiny regularization
+        m_sol = physical_m_from_s(s_sol, a);
+        [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m_sol, u, r);
+        detbar = Juu_bar*Jrr_bar - Jur_bar^2;
 
-        subject to
-            % Normalized moment bounds (valid and stabilizing)
-            -1 <= tm1 <= 1;
-             0 <= tm2 <= 1;
-            -1 <= tm3 <= 1;
-             0 <= tm4 <= 1;
+        if isfinite(fbar_sol) && detbar > eps_det && fbar_sol < best_fbar
+            best_fbar = fbar_sol;
+            best_p = p_sol;
+            best_s = s_sol;
+            best_m = m_sol;
+            best_detbar = detbar;
 
-            tau >= 0;
-            tau <= tau_ub;
+            if verbose
+                fprintf('[%d/%d] improved: fbar=%.6g, detJbar=%.3e\n', ...
+                    k, Nstart, best_fbar, best_detbar);
+            end
+        end
 
-            M2   >= 0;
-            Mloc >= 0;
-
-            Lift >= 0;
-
-            % ensure Jbar is PSD (strict)
-            Jbar - epsJ*eye(2) >= 0;
-
-            Block >= 0;
-            W >= 0;
-
-            tau >= trace(W);
-    cvx_end
-
-    if ~contains(cvx_status,'Solved') && ~contains(cvx_status,'Inaccurate')
-        error('Stage I status: %s', cvx_status);
+    catch ME
+        if verbose
+            fprintf('[%d/%d] failed: %s\n', k, Nstart, ME.message);
+        end
     end
-
-    tm_star = [1; tm1; tm2; tm3; tm4];
-    fprintf('Stage I solved: tau=%.6e, status=%s\n', cvx_optval, cvx_status);
-    fprintf('Normalized moments tm* = [%.4f %.4f %.4f %.4f %.4f]\n', tm_star);
-
-catch ME
-    fprintf('\n!!! Stage I failed: %s !!!\n', ME.message);
-    fprintf('Fallback: uniform on [-1,1]\n');
-    t_uni = linspace(-0.9,0.9,N_ant)'; % normalized
-    tm_star = zeros(5,1); tm_star(1)=1;
-    for k=1:4, tm_star(k+1)=mean(t_uni.^k); end
 end
 
-%% ============= 3) STAGE II (small-K completion + extraction) =============
-fprintf('--- Stage II: Hankel completion + robust extraction ---\n');
+if ~isfinite(best_fbar)
+    error('No feasible solution found. Try increasing Nstart, or increase delta, or relax eps_det.');
+end
 
-% For degree-4 moments, atoms <= 5 is enough in theory; choose K_ext=5
-K_ext = min(5, N_ant);
-n_z   = 2*K_ext + 1;
+%% ================== Output ==================
+f_true = best_fbar / cFIM;  % tr(J^{-1}) = tr(Jbar^{-1})/c
 
-cvx_clear;
-cvx_begin sdp quiet
-    cvx_solver sedumi
-    variable z(n_z)
+fprintf('\n==== Best solution found ====\n');
+fprintf('p* = [%.6g %.6g %.6g %.6g]\n', best_p);
+fprintf('s* = [s1..s4] = [%.6g %.6g %.6g %.6g]\n', best_s);
+fprintf('m* = [m1..m4] = [%.6g %.6g %.6g %.6g]\n', best_m);
 
-    % Soft match first 5 moments (z0..z4) to tm_star
-    minimize( 50*norm(z(1:5) - tm_star, 2) + 1e-6*z(1) )
+fprintf('Objective (bar) tr(Jbar^{-1}) = %.12g\n', best_fbar);
+fprintf('Objective (true) tr(J^{-1})   = %.12g\n', f_true);
+fprintf('det(Jbar) = %.12g\n', best_detbar);
+fprintf('det(J)    = %.12g\n', (cFIM^2)*best_detbar);
 
-    subject to
-        z(1) == 1;     % z0 must be 1 exactly
-        % Hankel moment matrix Mk(z) >= 0
-        H = hankel_matrix_cvx(z, K_ext);
-        H >= 0;
+% Optional PSD check on K=[-a,a]
+[M2, M1gm] = verify_m_PSD_on_K(best_m, a);
+fprintf('\nPSD check on K=[-a,a]:\n');
+fprintf('min eig(M2)   = %.3e\n', min(eig((M2+M2')/2)));
+fprintf('min eig(M1gm) = %.3e\n', min(eig((M1gm+M1gm')/2)));
 
-        % Localizing for g(t)=1-t^2: M_{K_ext-1}(g z) >= 0
-        % equals H_sub - H_shf >=0 in normalized [-1,1]
-        H_sub = hankel_matrix_cvx(z(1:end-2), K_ext-1);
-        H_shf = hankel_matrix_cvx(z(3:end),   K_ext-1);
-        (H_sub - H_shf) >= 0;
-cvx_end
 
-if ~contains(cvx_status,'Solved') && ~contains(cvx_status,'Inaccurate')
-    fprintf('Stage II failed (%s). Use uniform atoms.\n', cvx_status);
-    atoms_norm = linspace(-1,1,N_ant).';
-    weights = ones(N_ant,1)/N_ant;
-else
-    z_val = double(z);
+%% ================== Stage II (CVX): Flat extension + extraction ==================
+% Implements draft Stage-II: solve (SDR)_k, test flatness, extract r-atomic measure,
+% then build a Nant-element array geometry by rounding weights to counts.
 
-    % Build numeric Hankel (K_ext)
-    H_val = zeros(K_ext+1);
-    for i=1:K_ext+1
-        for j=1:K_ext+1
-            H_val(i,j) = z_val(i+j-1);
+% ---- prerequisites ----
+% 1) Install CVX (http://cvxr.com/cvx/) and run cvx_setup
+% 2) A solver like SDPT3 / SeDuMi should be available under CVX.
+
+k_max       = 6;        % try k=2,3,...,k_max until flatness holds
+rank_tol    = 1e-9;     % numerical rank tolerance (relative)
+root_im_tol = 1e-8;     % imaginary-part tolerance for roots
+
+stage2_verbose = true;
+
+[z_star, k_used, t_atoms, w_atoms, flat_rank] = stage2_sdr_and_extract_1d( ...
+    best_m, a, k_max, rank_tol, root_im_tol, stage2_verbose);
+
+% ---- Build discrete Nant array from the extracted atomic measure ----
+[x_array, counts] = build_array_from_atoms(t_atoms, w_atoms, Nant);
+
+% ---- Verify: moments / objective gap (measure vs Nant rounding) ----
+m_emp = empirical_moments_order4(x_array);     % from Nant discrete array
+fbar_emp = objective_fbar_of_m(m_emp, u, r, eps_det);
+
+fprintf('\n==== Stage II results ====\n');
+fprintf('SDR order k_used = %d\n', k_used);
+fprintf('flat rank r = %d\n', flat_rank);
+
+fprintf('Atoms t_i in [-a,a]:\n');
+disp(t_atoms(:).');
+
+fprintf('Weights w_i (sum=1):\n');
+disp(w_atoms(:).');
+
+fprintf('Rounded counts (sum=Nant=%d):\n', Nant);
+disp(counts(:).');
+
+fprintf('Check empirical moments from built array:\n');
+fprintf('m_emp = [m1..m4] = [%.6g %.6g %.6g %.6g]\n', m_emp);
+
+fprintf('Objective (bar) using m* (measure) = %.12g\n', best_fbar);
+fprintf('Objective (bar) using Nant-rounded array = %.12g\n', fbar_emp);
+fprintf('Objective (true) Nant-rounded array = %.12g\n', fbar_emp / cFIM);
+
+% ---- Plot the final array geometry ----
+plot_array_geometry(x_array, t_atoms, w_atoms, counts, a);
+
+
+%% ============================================================
+%%                     Local functions
+%% ============================================================
+
+function fbar = objective_fbar_of_p(p, u, r, a, eps_det)
+    [s, ok] = canonical_p_to_s_order4(p);
+    if ~ok
+        fbar = 1e30; return;
+    end
+    m = physical_m_from_s(s, a);
+
+    [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r);
+    detbar = Juu_bar*Jrr_bar - Jur_bar^2;
+
+    if ~(isfinite(detbar) && detbar > eps_det && Juu_bar > 0 && Jrr_bar > 0)
+        fbar = 1e30; return;
+    end
+
+    % tr(Jbar^{-1}) for 2x2
+    fbar = (r^2/(1-u^2)*Juu_bar + Jrr_bar) / detbar;
+
+    % mild barrier near singularity
+    if detbar < 10*eps_det
+        fbar = fbar + 1e6*(10*eps_det - detbar)^2;
+    end
+end
+
+function [c, ceq] = detbar_constraint(p, u, r, a, eps_det)
+    [s, ok] = canonical_p_to_s_order4(p);
+    if ~ok
+        c = 1; ceq = []; return;
+    end
+    m = physical_m_from_s(s, a);
+
+    [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r);
+    detbar = Juu_bar*Jrr_bar - Jur_bar^2;
+
+    % detbar >= eps_det  <=>  eps_det - detbar <= 0
+    c = eps_det - detbar;
+    ceq = [];
+end
+
+function [s, ok] = canonical_p_to_s_order4(p)
+    % Lemma-3 recursion: p -> s on I=[0,1], order 4
+    ok = true;
+    p = p(:);
+    p1=p(1); p2=p(2); p3=p(3); p4=p(4);
+
+    s1 = p1;
+    if ~(s1 > 0 && s1 < 1)
+        ok=false; s=nan(4,1); return;
+    end
+
+    % s2 in (s1^2, s1)
+    s2 = s1^2 + p2*s1*(1-s1);
+    if ~(s2 > s1^2 && s2 < s1)
+        ok=false; s=nan(4,1); return;
+    end
+
+    % s3 bounds
+    s3_minus = (s2^2)/s1;
+    s3_plus  = s2 - (s1 - s2)^2/(1 - s1);
+    if ~(s3_plus > s3_minus)
+        ok=false; s=nan(4,1); return;
+    end
+    s3 = s3_minus + p3*(s3_plus - s3_minus);
+    if ~(s3 > s3_minus && s3 < s3_plus)
+        ok=false; s=nan(4,1); return;
+    end
+
+    % s4 bounds
+    denom1 = (s2 - s1^2);
+    denom2 = (s1 - s2);
+    if ~(denom1 > 0 && denom2 > 0)
+        ok=false; s=nan(4,1); return;
+    end
+    s4_minus = (s2^3 - 2*s1*s2*s3 + s3^2) / denom1;
+    s4_plus  = s3 - (s2 - s3)^2 / denom2;
+    if ~(s4_plus > s4_minus)
+        ok=false; s=nan(4,1); return;
+    end
+    s4 = s4_minus + p4*(s4_plus - s4_minus);
+    if ~(s4 > s4_minus && s4 < s4_plus)
+        ok=false; s=nan(4,1); return;
+    end
+
+    s = [s1; s2; s3; s4];
+end
+
+function m = physical_m_from_s(s, a)
+    % Affine map t = 2a*u - a, u in [0,1], t in [-a,a]
+    % m_k = E[t^k] = sum_{j=0}^k C(k,j) (2a)^j (-a)^(k-j) s_j, with s0=1
+    s = s(:);
+    sj = [1.0; s(1); s(2); s(3); s(4)];
+
+    m = zeros(4,1);
+    for k = 1:4
+        acc = 0;
+        for j = 0:k
+            acc = acc + nchoosek(k,j) * (2*a)^j * (-a)^(k-j) * sj(j+1);
+        end
+        m(k) = acc;
+    end
+end
+
+function [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r)
+    % EXACTLY match your paper's closed forms INSIDE the common factor c.
+    % J = c * Jbar.
+    m1=m(1); m2=m(2); m3=m(3); m4=m(4);
+
+    Juu_bar = ( m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2 );
+    Jrr_bar = ( (1-u^2)^2/(4*r^4) ) * ( m4 + m2^2 );
+    Jur_bar = ( (1-u^2)/(2*r^2) ) * ( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
+end
+
+function [M2, M1gm] = verify_m_PSD_on_K(m, a)
+    % PSD constraints for moments on K=[-a,a], g(t)=a^2-t^2
+    m0 = 1; m1=m(1); m2=m(2); m3=m(3); m4=m(4);
+
+    M2 = [m0 m1 m2;
+          m1 m2 m3;
+          m2 m3 m4];
+
+    % Localizing: ∫ t^{i+j} (a^2 - t^2) dμ = a^2 m_{i+j} - m_{i+j+2}
+    M1gm = [a^2*m0 - m2,  a^2*m1 - m3;
+            a^2*m1 - m3,  a^2*m2 - m4];
+end
+
+function [z_star, k_used, t_atoms, w_atoms, r_flat] = stage2_sdr_and_extract_1d( ...
+    m_star, a, k_max, rank_tol, root_im_tol, verbose)
+
+% Stage II: solve (SDR)_k via CVX until flatness holds, then extract atoms.
+% Inputs:
+%   m_star = [m1;m2;m3;m4] from Stage I (with m0=1 implied)
+%   a: half-aperture, K=[-a,a]
+%   k_max: max relaxation order
+% Outputs:
+%   z_star: extended moments [z0..z_{2k_used}]
+%   t_atoms, w_atoms: r-atomic measure on [-a,a]
+%   r_flat: rank at flatness
+
+    if nargin < 6, verbose = true; end
+
+    % fixed low-order moments
+    m0 = 1;
+    m1 = m_star(1); m2 = m_star(2); m3 = m_star(3); m4 = m_star(4);
+
+    z_star = [];
+    k_used = NaN;
+    r_flat = NaN;
+
+    % deterministic seed for repeatability
+    rng(1);
+
+    for k = 2:k_max
+        n = 2*k + 1;  % z0..z_{2k}
+
+        % Generic random linear objective <R,z> (scaled to avoid huge coefficients)
+        rvec = randn(n,1);
+        rvec = rvec / max(1, max(abs(rvec)));
+        decay = (0.2).^( (0:n-1)' );       % damp higher-order coefficients a bit
+        rvec = rvec .* decay;
+
+        if verbose
+            fprintf('\n[Stage II] Solving (SDR) at order k=%d ...\n', k);
+        end
+
+        % ---- CVX SDP ----
+        cvx_begin sdp quiet
+            cvx_precision high
+            variable z(n,1)
+
+            expression Mk(k+1,k+1)
+            expression Lk(k,k)
+
+            minimize( rvec' * z )
+
+            subject to
+                % Fix the first 5 moments to match Stage I tms (m0..m4)
+                z(1) == m0;  % z0
+                z(2) == m1;  % z1
+                z(3) == m2;  % z2
+                z(4) == m3;  % z3
+                z(5) == m4;  % z4
+
+                % Moment matrix Mk(z) (Hankel)
+                for i = 0:k
+                    for j = 0:k
+                        Mk(i+1,j+1) = z(i+j+1);
+                    end
+                end
+                Mk >= 0;
+
+                % Localizing Mk-1(g z), g(t)=a^2 - t^2
+                for i = 0:k-1
+                    for j = 0:k-1
+                        % entry = ∫ t^{i+j} (a^2 - t^2) dµ = a^2 z_{i+j} - z_{i+j+2}
+                        % index shift: z_{q} stored at z(q+1)
+                        Lk(i+1,j+1) = a^2 * z(i+j+1) - z(i+j+3);
+                    end
+                end
+                Lk >= 0;
+        cvx_end
+
+        if verbose
+            fprintf('  CVX status: %s\n', cvx_status);
+        end
+
+        if ~(strcmpi(cvx_status,'Solved') || strcmpi(cvx_status,'Inaccurate/Solved'))
+            continue;
+        end
+
+        z_val = double(z);
+
+        % Build numeric moment matrices for flatness test
+        Mk_val   = moment_matrix_1d_from_z(z_val, k);
+        Mkm1_val = moment_matrix_1d_from_z(z_val, k-1);
+
+        r1 = numerical_rank(Mk_val, rank_tol);
+        r0 = numerical_rank(Mkm1_val, rank_tol);
+
+        if verbose
+            fprintf('  rank(Mk)=%d, rank(Mk-1)=%d\n', r1, r0);
+        end
+
+        if r1 == r0 && r1 >= 1
+            % Flatness achieved
+            z_star = z_val;
+            k_used = k;
+            r_flat = r1;
+
+            if verbose
+                fprintf('  Flatness holds at k=%d with r=%d. Extracting atoms...\n', k, r_flat);
+            end
+
+            [t_atoms, w_atoms] = extract_atoms_weights_1d(z_star, r_flat, a, root_im_tol);
+
+            % Final sanity fixes
+            t_atoms = real(t_atoms(:));
+            w_atoms = real(w_atoms(:));
+            w_atoms(w_atoms < 0) = 0;
+            if sum(w_atoms) <= 0
+                error('Stage II extraction produced non-positive weights.');
+            end
+            w_atoms = w_atoms / sum(w_atoms);
+
+            return;
         end
     end
 
-    % Determine numeric rank
-    s = svd((H_val+H_val')/2);
-    tol = 1e-9*max(s);
-    r_rank = sum(s > tol);
-    r_rank = max(1, min(r_rank, K_ext)); % safe
-    fprintf('Stage II solved. numeric rank = %d (K_ext=%d)\n', r_rank, K_ext);
+    error('Stage II failed: no flat extension found up to k_max=%d. Try increasing k_max or adjusting rank_tol.', k_max);
+end
 
-    % ESPRIT-like extraction on rank-r subspace
-    [U,Sv,~] = svd(H_val);
-    Ur = U(:,1:r_rank);
-    Sr = Sv(1:r_rank,1:r_rank);
-    H_clean = Ur*Sr*Ur';   % symmetric denoised Hankel
+function Mk = moment_matrix_1d_from_z(z, k)
+% Mk(z) = [ z_{i+j} ]_{i,j=0..k}, where z0 stored at z(1)
+    Mk = zeros(k+1, k+1);
+    for i = 0:k
+        for j = 0:k
+            Mk(i+1,j+1) = z(i+j+1);
+        end
+    end
+    Mk = (Mk + Mk')/2;
+end
 
-    H0 = H_clean(1:end-1, 1:r_rank);
-    H1 = H_clean(2:end,   1:r_rank);
+function r = numerical_rank(A, reltol)
+% numerical rank via SVD threshold: s_i >= reltol * s_1
+    s = svd((A+A')/2);
+    if isempty(s) || s(1) <= 0
+        r = 0; return;
+    end
+    r = sum(s >= reltol * s(1));
+end
 
-    % Use least-squares operator instead of pinv to be stable
-    A = (H0 \ H1);                 % r_rank x r_rank
-    atoms_norm = eig(A);
-    atoms_norm = real(atoms_norm);
-    atoms_norm = atoms_norm(abs(atoms_norm) <= 1.05);  % bound
-    atoms_norm = sort(atoms_norm);
+function [t_atoms, w_atoms] = extract_atoms_weights_1d(z, r, a, root_im_tol)
+% 1D extraction:
+%   - Find recurrence coefficients c from moments: m_{i+r} = sum_{j=0}^{r-1} c_j m_{i+j}
+%   - Annihilating polynomial p(t)=t^r - sum_{j=0}^{r-1} c_j t^j
+%   - Roots of p(t) are support points
+%   - Recover weights from Vandermonde using moments m0..m_{r-1}
 
-    % If not enough atoms, pad uniformly
-    if numel(atoms_norm) < r_rank
-        atoms_norm = [atoms_norm; linspace(-0.8,0.8,r_rank-numel(atoms_norm))'];
-        atoms_norm = sort(atoms_norm);
+    % Need moments up to m_{2r-1}: z(2r) exists if k_used >= r
+    if length(z) < 2*r
+        error('Not enough moments in z for extraction: need at least z0..z_{2r-1}.');
     end
 
-    % Convert to physical locations
-    atoms_phys = scale_fac * atoms_norm(:);
+    % Build Hankel system H*c = b
+    H = zeros(r, r);
+    b = zeros(r, 1);
 
-    % Recover weights from first 5 physical moments using projected-gradient NNLS
-    m_phys = zeros(5,1);
-    for k=0:4
-        m_phys(k+1) = tm_star(k+1) * scale_fac^k;
+    for i = 0:r-1
+        for j = 0:r-1
+            H(i+1, j+1) = z(i+j+1);      % m_{i+j}
+        end
+        b(i+1) = z(i+r+1);              % m_{i+r}
     end
 
-    V = zeros(5, numel(atoms_phys));
-    for i=1:5
-        V(i,:) = (atoms_phys.').^(i-1);
-    end
-
-    weights = nnls_projected_gradient(V, m_phys, 2000, 1e-3);
-    if sum(weights) > 0
-        weights = weights / sum(weights);
+    % Solve (use pinv if ill-conditioned)
+    if r == 1
+        c = b / H;  % scalar
     else
-        weights = ones(numel(atoms_phys),1)/numel(atoms_phys);
+        if rcond(H) < 1e-12
+            c = pinv(H) * b;
+        else
+            c = H \ b;
+        end
     end
 
-    % Discretize to N_ant by rounding weights
-    [atoms_phys, weights] = merge_close_atoms(atoms_phys, weights, 1e-6);
-    [x_ant, w_ant] = discretize_atoms(atoms_phys, weights, N_ant);
+    c = c(:);  % c0..c_{r-1}
+
+    % Polynomial coefficients for roots(): [1, -c_{r-1}, ..., -c0]
+    poly_coeff = [1; -flipud(c)];
+    t_all = roots(poly_coeff.');
+
+    % Keep real roots in [-a, a]
+    t_real = t_all(abs(imag(t_all)) <= root_im_tol);
+    t_real = real(t_real);
+    t_real = t_real(t_real >= -a - 1e-10 & t_real <= a + 1e-10);
+
+    % If numerical duplicates, merge by rounding
+    t_real = sort(t_real);
+    if isempty(t_real)
+        error('No real roots found in [-a,a]. Extraction failed.');
+    end
+
+    % If more roots than r due to numeric noise, keep the r "most central" distinct ones
+    % (typical when multiplicities / rounding occurs).
+    t_unique = uniquetol(t_real, 1e-8, 'DataScale', max(1, max(abs(t_real))));
+    if length(t_unique) > r
+        % keep r roots with smallest |imag| originally is already real; now keep r closest to [-a,a] center
+        [~, idx] = sort(abs(t_unique));
+        t_unique = sort(t_unique(idx(1:r)));
+    end
+
+    if length(t_unique) < r
+        % fallback: try to increase tolerance a bit by clustering
+        t_unique = t_real;
+        t_unique = t_unique(1:min(r, length(t_unique)));
+        t_unique = sort(t_unique);
+    end
+
+    t_atoms = t_unique(:);
+    r_eff = length(t_atoms);
+
+    % Vandermonde for weights using moments m0..m_{r_eff-1}
+    V = zeros(r_eff, r_eff);
+    for ell = 1:r_eff
+        V(ell,:) = (t_atoms.^(ell-1)).';
+    end
+    mvec = z(1:r_eff);  % [m0..m_{r_eff-1}]
+
+    if r_eff == 1
+        w_atoms = 1;
+    else
+        if rcond(V) < 1e-12
+            w_atoms = pinv(V) * mvec;
+        else
+            w_atoms = V \ mvec;
+        end
+    end
+
+    % Clean weights
+    w_atoms = real(w_atoms(:));
+    w_atoms(w_atoms < 0) = 0;
+    if sum(w_atoms) <= 0
+        error('Recovered weights are all non-positive.');
+    end
+    w_atoms = w_atoms / sum(w_atoms);
 end
 
-% If Stage II failed, define physical atoms directly
-if ~exist('atoms_phys','var')
-    atoms_phys = linspace(-a,a,N_ant).';
-    weights = ones(N_ant,1)/N_ant;
-    [x_ant, w_ant] = discretize_atoms(atoms_phys, weights, N_ant);
+function [x_array, counts] = build_array_from_atoms(t_atoms, w_atoms, Nant)
+% Convert atomic measure (t_atoms, w_atoms) into Nant antenna positions
+% by largest-remainder rounding.
+
+    r = length(t_atoms);
+    w_atoms = w_atoms(:) / sum(w_atoms);
+
+    raw = w_atoms * Nant;
+    counts = floor(raw);
+    rem = Nant - sum(counts);
+
+    % distribute remaining antennas to largest fractional parts
+    frac = raw - counts;
+    [~, idx] = sort(frac, 'descend');
+    for k = 1:rem
+        counts(idx(k)) = counts(idx(k)) + 1;
+    end
+
+    % build array
+    x_array = [];
+    for i = 1:r
+        x_array = [x_array; t_atoms(i)*ones(counts(i),1)]; %#ok<AGROW>
+    end
+
+    % just in case
+    if length(x_array) ~= Nant
+        error('Count rounding mismatch: got %d antennas, expected %d.', length(x_array), Nant);
+    end
+
+    % sort positions
+    x_array = sort(x_array);
 end
 
-%% ============= 4) VISUALIZATION =============
-figure('Name','Optimized Array');
-stem(x_ant, w_ant, 'filled', 'LineWidth', 1.5);
-hold on;
-stem(linspace(-a,a,N_ant), (1/N_ant)*ones(N_ant,1), 'r--', 'Marker','none');
-legend('Optimized (two-stage)', 'Uniform (ref)');
-title(sprintf('Array Layout (N=%d, \\theta=%.1f^\\circ)', N_ant, theta_deg));
-xlabel('Position (\\lambda)'); ylabel('Weight');
-grid on; xlim([-a-0.5, a+0.5]);
-
-%% ====================== AUX FUNCTIONS ======================
-
-function m = moments_from_x(x)
-x = x(:);
-m = [1, mean(x), mean(x.^2), mean(x.^3), mean(x.^4)];
-end
-
-function J = Jbar_from_phys_m(m,u,r)
-m1=m(2); m2=m(3); m3=m(4); m4=m(5);
-Juu = m2 + (2*u/r)*m3 + (u^2/r^2)*m4 + (m1 + (u/r)*m2)^2;
-Jrr = ((1-u^2)^2/(4*r^4))*(m4 + m2^2);
-Jur = ((1-u^2)/(2*r^2))*( m3 + (u/r)*m4 + m1*m2 + (u/r)*m2^2 );
-J = [Juu Jur; Jur Jrr];
-end
-
-function H = hankel_matrix_cvx(z, K)
-H = cvx(zeros(K+1));
-for i=1:K+1
-    for j=1:K+1
-        H(i,j) = z(i+j-1);
+function m = empirical_moments_order4(x)
+% Returns [m1..m4] with mk = (1/N) sum x^k
+    x = x(:);
+    m = zeros(1,4);
+    for k = 1:4
+        m(k) = mean(x.^k);
     end
 end
-H = (H+H')/2;
-end
 
-function w = nnls_projected_gradient(A, b, iters, stepsz)
-% Minimize ||A w - b||_2^2 s.t. w >= 0
-% Pure MATLAB, no toolbox.
-[m,n] = size(A);
-w = zeros(n,1);
-AtA = A.'*A;
-Atb = A.'*b;
-for k=1:iters
-    grad = 2*(AtA*w - Atb);
-    w = w - stepsz*grad;
-    w = max(w, 0);
-end
-end
+function fbar = objective_fbar_of_m(m, u, r, eps_det)
+% Evaluate scaled objective tr(Jbar^{-1}) given physical moments m=[m1..m4]
+    m = m(:);
+    [Juu_bar, Jrr_bar, Jur_bar] = Jbar_from_m(m, u, r);
+    detbar = Juu_bar*Jrr_bar - Jur_bar^2;
 
-function [x_out, w_out] = merge_close_atoms(x, w, tol)
-% merge atoms with nearly identical location
-[xs,ord] = sort(x(:));
-ws = w(ord);
-x_out = [];
-w_out = [];
-i=1;
-while i<=numel(xs)
-    j=i;
-    accw = ws(i);
-    accx = xs(i)*ws(i);
-    while j+1<=numel(xs) && abs(xs(j+1)-xs(i))<=tol
-        j=j+1;
-        accw = accw + ws(j);
-        accx = accx + xs(j)*ws(j);
+    if ~(isfinite(detbar) && detbar > eps_det && Juu_bar > 0 && Jrr_bar > 0)
+        fbar = 1e30; return;
     end
-    x_out = [x_out; accx/accw]; %#ok<AGROW>
-    w_out = [w_out; accw];      %#ok<AGROW>
-    i=j+1;
-end
+
+    fbar = (r^2/(1-u^2)*Juu_bar + Jrr_bar) / detbar;
 end
 
-function [x_ant, w_ant] = discretize_atoms(x_atoms, w_atoms, N)
-% Convert (atoms,weights) into N discrete antennas by integer rounding
-x_atoms = x_atoms(:);
-w_atoms = w_atoms(:);
-w_atoms = max(w_atoms,0);
-if sum(w_atoms)==0, w_atoms=ones(size(w_atoms))/numel(w_atoms); end
-w_atoms = w_atoms/sum(w_atoms);
+function plot_array_geometry(x_array, t_atoms, w_atoms, counts, a)
+% User-friendly plots of final array geometry and extracted measure.
 
-raw = w_atoms*N;
-cnt = floor(raw);
-rem = N - sum(cnt);
-[~,ord] = sort(raw-cnt,'descend');
-for i=1:rem
-    cnt(ord(i)) = cnt(ord(i)) + 1;
-end
+    x_array = x_array(:);
+    t_atoms = t_atoms(:);
+    w_atoms = w_atoms(:);
+    counts  = counts(:);
 
-x_ant = [];
-for i=1:numel(x_atoms)
-    if cnt(i)>0
-        x_ant = [x_ant; repmat(x_atoms(i), cnt(i), 1)]; %#ok<AGROW>
+    % ---- Figure 1: antenna positions (with slight vertical jitter for visibility) ----
+    figure('Name','Final Array Geometry','Color','w');
+    yjit = 0.02 * (rand(size(x_array)) - 0.5);
+
+    plot([-a a],[0 0],'k-','LineWidth',1.0); hold on;
+    scatter(x_array, yjit, 28, 'filled');  % antennas
+    scatter(t_atoms, zeros(size(t_atoms)), 120, 'filled'); % cluster centers
+
+    for i = 1:length(t_atoms)
+        text(t_atoms(i), 0.04, sprintf('  #%d', counts(i)), ...
+            'FontSize', 11, 'FontWeight', 'bold', 'HorizontalAlignment', 'left');
     end
-end
-x_ant = sort(x_ant);
 
-% equal weights for discrete antennas (or keep grouped weights if you want)
-w_ant = ones(N,1)/N;
+    xlim([-a a]);
+    ylim([-0.08 0.10]);
+    grid on;
+    xlabel('Position x (m)');
+    ylabel('visual jitter');
+    title('Antenna positions on K=[-a,a] (dots) and extracted atoms (large dots)');
+    set(gca,'FontSize',12,'LineWidth',1.0);
+
+    % ---- Figure 2: weights bar ----
+    figure('Name','Extracted Atomic Measure','Color','w');
+    bar(t_atoms, w_atoms, 0.4);
+    grid on;
+    xlabel('Atom location t_i (m)');
+    ylabel('Weight w_i');
+    title('Extracted r-atomic measure (location vs weight)');
+    set(gca,'FontSize',12,'LineWidth',1.0);
 end
